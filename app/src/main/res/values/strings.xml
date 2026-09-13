@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">AMusic</string>
+    <string name="notification_channel_name">播放控制</string>
+    <string name="notification_channel_desc">音乐播放时的前台通知与控制</string>
+
+    <string name="tab_songs">歌曲</string>
+    <string name="tab_artists">歌手</string>
+    <string name="tab_playlists">歌单</string>
+
+    <string name="nav_music_hall">音乐馆</string>
+    <string name="nav_mine">我的</string>
+
+    <string name="unknown_title">未知标题</string>
+    <string name="unknown_artist">未知歌手</string>
+    <string name="unknown_album">未知专辑</string>
+    <string name="all_songs">全部歌曲</string>
+    <string name="my_favorites">我喜欢</string>
+    <string name="create_playlist">新建歌单</string>
+    <string name="playlist_name_hint">歌单名称</string>
+</resources>

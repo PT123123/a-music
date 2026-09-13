@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base window theme. Compose draws its own Material3 surface on top of this. -->
+    <style name="Theme.AMusic" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#0F0F12</item>
+        <item name="android:navigationBarColor">#0F0F12</item>
+        <item name="android:windowBackground">#0F0F12</item>
+        <item name="android:colorEdgeEffect">#1FC76B</item>
+    </style>
+</resources>

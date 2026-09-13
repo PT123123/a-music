@@ -1,0 +1,29 @@
+# Machine-local secrets & configuration — never commit
+# (holds net24.baseUrl, the online lossless source's site URL)
+local.properties
+
+# Gradle
+.gradle/
+build/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Kotlin
+.kotlin/
+
+# Native build output
+app/src/main/obj/
+app/src/main/libs/
+
+# Local session / build artifacts
+.build.log
+.workbuddy/
+
+# OS
+.DS_Store
+Thumbs.db
