@@ -2,6 +2,12 @@ package com.amusic.ui.player
 
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
@@ -54,7 +60,9 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
@@ -66,7 +74,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -291,18 +298,25 @@ fun NowPlayingScreen(nav: NavHostController) {
             Spacer(Modifier.height(4.dp))
 
             // ---- transport ----
+            // In lyrics mode the controls shrink so the freed space goes to the lyrics —
+            // QQ-Music-style. The size changes animate, so the switch reads as one motion.
+            val compact = showLyrics
+            val playBtnSize by animateDpAsState(if (compact) 48.dp else 68.dp, label = "playBtn")
+            val playIconSize by animateDpAsState(if (compact) 24.dp else 34.dp, label = "playIcon")
+            val skipIconSize by animateDpAsState(if (compact) 24.dp else 36.dp, label = "skipIcon")
+            val transportGap by animateDpAsState(if (compact) 14.dp else 24.dp, label = "transportGap")
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 IconButton(onClick = { PlayerController.prev() }) {
-                    Icon(Icons.Filled.SkipPrevious, contentDescription = "上一首", tint = TextPrimary, modifier = Modifier.size(36.dp))
+                    Icon(Icons.Filled.SkipPrevious, contentDescription = "上一首", tint = TextPrimary, modifier = Modifier.size(skipIconSize))
                 }
-                Spacer(Modifier.width(24.dp))
+                Spacer(Modifier.width(transportGap))
                 Box(
                     Modifier
-                        .size(68.dp)
+                        .size(playBtnSize)
                         .clip(CircleShape)
                         .background(accent.accent)
                         .clickable { PlayerController.togglePlay() },
@@ -312,100 +326,112 @@ fun NowPlayingScreen(nav: NavHostController) {
                         if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = if (isPlaying) "暂停" else "播放",
                         tint = accent.onAccent,
-                        modifier = Modifier.size(34.dp),
+                        modifier = Modifier.size(playIconSize),
                     )
                 }
-                Spacer(Modifier.width(24.dp))
+                Spacer(Modifier.width(transportGap))
                 IconButton(onClick = { PlayerController.next() }) {
-                    Icon(Icons.Filled.SkipNext, contentDescription = "下一首", tint = TextPrimary, modifier = Modifier.size(36.dp))
+                    Icon(Icons.Filled.SkipNext, contentDescription = "下一首", tint = TextPrimary, modifier = Modifier.size(skipIconSize))
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            // ---- volume ----
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.VolumeUp, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Slider(
-                    value = state.volume / 100f,
-                    onValueChange = { PlayerController.setVolume((it * 100).toInt()) },
-                    colors = SliderDefaults.colors(
-                        thumbColor = accent.accent,
-                        activeTrackColor = accent.accent,
-                        inactiveTrackColor = TextSecondary.copy(alpha = 0.3f),
-                    ),
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    "${state.volume}",
-                    color = TextSecondary,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.width(26.dp),
-                )
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            // ---- action row ----
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically,
+            // ---- volume + action row ----
+            // Lyrics mode hides these entirely — that room belongs to the lyrics. The
+            // collapse is animated, so the transport/progress above glide down into their
+            // compact spots (QQ-Music behaviour).
+            AnimatedVisibility(
+                visible = !showLyrics,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
             ) {
-                PlayerAction(
-                    icon = if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                    label = if (isFav) "已收藏" else "收藏",
-                    tint = if (isFav) accent.accent else TextSecondary,
-                    onClick = {
-                        val p = audioPath ?: return@PlayerAction
-                        scope.launch {
-                            app.repository.toggleFavorite(track.songId, p)
-                            isFav = app.repository.isFavorite(p)
-                        }
-                    },
-                )
-                PlayerAction(
-                    icon = Icons.Filled.Timer,
-                    label = if (sleep.mode == SleepMode.OFF) "定时" else fmtRemaining(sleep.remainingMs),
-                    tint = if (sleep.mode == SleepMode.OFF) TextSecondary else accent.accent,
-                    onClick = { showSleepDialog = true },
-                )
-                PlayerAction(
-                    icon = Icons.Filled.Palette,
-                    label = "样式",
-                    tint = TextSecondary,
-                    onClick = { showStyleDialog = true },
-                )
-                PlayerAction(
-                    icon = Icons.Filled.Equalizer,
-                    label = "均衡器",
-                    tint = TextSecondary,
-                    onClick = { showEqDialog = true },
-                )
-                PlayerAction(
-                    icon = Icons.Filled.Subtitles,
-                    label = "桌面歌词",
-                    tint = if (desktopLyricsOn) accent.accent else TextSecondary,
-                    onClick = {
-                        val on = !desktopLyricsOn
-                        app.settings.setDesktopLyrics(on)
-                        if (on && !DesktopLyrics.canShow(context)) {
-                            Toast.makeText(
-                                context,
-                                "还需要「显示在其他应用上层」权限：我的 → 播放器设置 → 桌面歌词",
-                                Toast.LENGTH_LONG,
-                            ).show()
-                        }
-                    },
-                )
-                PlayerAction(
-                    icon = Icons.Filled.Info,
-                    label = "详情",
-                    tint = TextSecondary,
-                    onClick = { showDetail = true },
-                )
+                Column {
+                    // ---- volume ----
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.VolumeUp, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Slider(
+                            value = state.volume / 100f,
+                            onValueChange = { PlayerController.setVolume((it * 100).toInt()) },
+                            colors = SliderDefaults.colors(
+                                thumbColor = accent.accent,
+                                activeTrackColor = accent.accent,
+                                inactiveTrackColor = TextSecondary.copy(alpha = 0.3f),
+                            ),
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "${state.volume}",
+                            color = TextSecondary,
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.width(26.dp),
+                        )
+                    }
+
+                    Spacer(Modifier.height(10.dp))
+
+                    // ---- action row ----
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        PlayerAction(
+                            icon = if (isFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                            label = if (isFav) "已收藏" else "收藏",
+                            tint = if (isFav) accent.accent else TextSecondary,
+                            onClick = {
+                                val p = audioPath ?: return@PlayerAction
+                                scope.launch {
+                                    app.repository.toggleFavorite(track.songId, p)
+                                    isFav = app.repository.isFavorite(p)
+                                }
+                            },
+                        )
+                        PlayerAction(
+                            icon = Icons.Filled.Timer,
+                            label = if (sleep.mode == SleepMode.OFF) "定时" else fmtRemaining(sleep.remainingMs),
+                            tint = if (sleep.mode == SleepMode.OFF) TextSecondary else accent.accent,
+                            onClick = { showSleepDialog = true },
+                        )
+                        PlayerAction(
+                            icon = Icons.Filled.Palette,
+                            label = "样式",
+                            tint = TextSecondary,
+                            onClick = { showStyleDialog = true },
+                        )
+                        PlayerAction(
+                            icon = Icons.Filled.Equalizer,
+                            label = "均衡器",
+                            tint = TextSecondary,
+                            onClick = { showEqDialog = true },
+                        )
+                        PlayerAction(
+                            icon = Icons.Filled.Subtitles,
+                            label = "桌面歌词",
+                            tint = if (desktopLyricsOn) accent.accent else TextSecondary,
+                            onClick = {
+                                val on = !desktopLyricsOn
+                                app.settings.setDesktopLyrics(on)
+                                if (on && !DesktopLyrics.canShow(context)) {
+                                    Toast.makeText(
+                                        context,
+                                        "还需要「显示在其他应用上层」权限：我的 → 播放器设置 → 桌面歌词",
+                                        Toast.LENGTH_LONG,
+                                    ).show()
+                                }
+                            },
+                        )
+                        PlayerAction(
+                            icon = Icons.Filled.Info,
+                            label = "详情",
+                            tint = TextSecondary,
+                            onClick = { showDetail = true },
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(6.dp))
@@ -675,27 +701,45 @@ private fun LyricsView(
         return
     }
 
-    val density = LocalDensity.current
     BoxWithConstraints(modifier) {
         val halfViewport = maxHeight / 2
-        val centerPx = with(density) { halfViewport.roundToPx() }
         val listState = rememberLazyListState()
+        val activeIndex = rememberUpdatedState(currentIndex)
 
-        // Keep the active line dead-centre. `scrollOffset` alone is not trustworthy here:
-        // it is interpreted relative to the item's own slot, and with a huge top
-        // contentPadding plus not-yet-measured items the result can land half a screen
-        // low (the reported "active line stuck behind the controls" bug). So we scroll
-        // first, then measure where the item actually landed and correct the remainder.
-        LaunchedEffect(currentIndex, centerPx) {
-            if (currentIndex < 0 || centerPx <= 0) return@LaunchedEffect
-            listState.animateScrollToItem(currentIndex, scrollOffset = -centerPx)
-            val item = listState.layoutInfo.visibleItemsInfo
-                .firstOrNull { it.index == currentIndex }
-                ?: return@LaunchedEffect
-            val delta = item.offset - centerPx
-            if (abs(delta) > 1) {
-                Log.d(TAG, "lyric line $currentIndex off by ${delta}px -> correcting")
-                listState.scrollBy(delta.toFloat())
+        // Centre the active line — its MIDDLE on the viewport's centre line. Two traps
+        // make naive `scrollToItem(index, offset)` math wrong here:
+        //  * item offsets are measured from the start of the CONTENT area, so with the
+        //    symmetric half-viewport contentPadding the visual centre sits at
+        //    (viewportStart + viewportEnd) / 2, NOT at `viewport height / 2` — targeting
+        //    the latter sends the line to the bottom edge (the old "line sits low / gets
+        //    cut off" bug), and the bogus correction then scrolls back to the clamp.
+        //  * entering lyrics mode animates this Box's height, so a one-shot correction
+        //    computed mid-transition goes stale by the time the resize settles.
+        // So: scroll near the line, then correct by measured deltas; a snapshotFlow
+        // re-true-ups while the viewport itself is resizing.
+        suspend fun centreTo(index: Int) {
+            var item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+            if (item == null) {
+                listState.scrollToItem(index)
+                item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+                    ?: return
+            }
+            val info = listState.layoutInfo
+            val mid = (info.viewportStartOffset + info.viewportEndOffset) / 2
+            val delta = (item.offset + item.size / 2) - mid
+            if (abs(delta) > 1) listState.scrollBy(delta.toFloat())
+        }
+
+        LaunchedEffect(currentIndex) {
+            if (currentIndex < 0) return@LaunchedEffect
+            listState.animateScrollToItem(currentIndex)
+            centreTo(currentIndex)
+        }
+
+        LaunchedEffect(Unit) {
+            snapshotFlow { listState.layoutInfo.viewportEndOffset }.collect {
+                val index = activeIndex.value
+                if (index >= 0) centreTo(index)
             }
         }
 
