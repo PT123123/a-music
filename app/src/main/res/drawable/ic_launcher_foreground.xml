@@ -1,10 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- simplified music note in QQ-green -->
-    <path
-        android:fillColor="#1FC76B"
-        android:pathData="M54,26 C54,26 54,26 54,26 L78,32 L78,52 C84,47 92,48 92,56 C92,64 84,68 78,63 L78,42 L60,38 L60,70 C66,65 74,66 74,74 C74,82 66,86 60,81 L60,34 L54,33 Z" />
+    <!-- Single eighth note (Material music_note, 24dp grid scaled x2 and centered in the
+         adaptive-icon safe zone) in the app's accent green. -->
+    <group
+        android:translateX="30"
+        android:translateY="30"
+        android:scaleX="2"
+        android:scaleY="2">
+        <path
+            android:fillColor="#1FC76B"
+            android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
+    </group>
 </vector>
