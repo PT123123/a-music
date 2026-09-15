@@ -1,5 +1,6 @@
 package com.amusic.ui.library
 
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -435,7 +436,8 @@ internal fun SongListContent(
     scrollRequest: ScrollRequest? = null,
     modifier: Modifier = Modifier,
 ) {
-    val app = LocalContext.current.applicationContext as MainApplication
+    val context = LocalContext.current
+    val app = context.applicationContext as MainApplication
     val repo = app.repository
     val favPaths by repo.favoritePaths.collectAsState(initial = emptySet())
     val playlists by repo.playlists.collectAsState(initial = emptyList())
@@ -514,6 +516,31 @@ internal fun SongListContent(
                     },
                     menu = if (selectionEnabled) {
                         {
+                            DropdownMenuItem(
+                                text = { Text("添加到当前播放列表", color = TextPrimary) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Filled.QueueMusic,
+                                        contentDescription = null,
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                },
+                                onClick = {
+                                    closeMenu()
+                                    // An empty queue is really "play this now" — see
+                                    // PlayerController.addToQueue for why.
+                                    val startsPlaying = PlayerController.state.value.playlist.isEmpty()
+                                    PlayerController.addToQueue(song.toTrack())
+                                    val queued = PlayerController.state.value.playlist.size
+                                    Toast.makeText(
+                                        context,
+                                        if (startsPlaying) "已开始播放「${song.title}」"
+                                        else "已添加到播放列表（共 $queued 首）",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
+                            )
                             DropdownMenuItem(
                                 text = { Text("加入歌单", color = TextPrimary) },
                                 leadingIcon = { Icon(Icons.Filled.PlaylistAdd, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },

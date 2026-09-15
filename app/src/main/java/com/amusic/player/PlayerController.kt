@@ -235,13 +235,21 @@ object PlayerController : MPVLib.EventObserver {
     // ---- Queue management ----
 
     /** Add a track to the end of the queue. */
-    fun addToQueue(track: Track) {
-        queue = queue + track
-        _state.update { it.copy(playlist = queue) }
-    }
+    fun addToQueue(track: Track) = addToQueue(listOf(track))
 
-    /** Add multiple tracks to the end of the queue. */
+    /**
+     * Add multiple tracks to the end of the queue.
+     *
+     * With nothing queued yet (fresh install, or the user just cleared the list) appending
+     * would leave a list whose cursor is -1: no current track, nothing in mpv, no mini
+     * player — i.e. the button looks broken. Start playing instead, the way QQ Music does.
+     */
     fun addToQueue(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        if (queue.isEmpty()) {
+            playQueue(tracks, 0)
+            return
+        }
         queue = queue + tracks
         _state.update { it.copy(playlist = queue) }
     }
