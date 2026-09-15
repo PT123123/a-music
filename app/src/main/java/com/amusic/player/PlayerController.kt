@@ -3,6 +3,8 @@ package com.amusic.player
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import com.amusic.data.prefs.PlaybackSnapshotStore
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Singleton playback core. Wraps libmpv (via [MPVLib]) and exposes a [StateFlow] of
@@ -34,6 +38,35 @@ object PlayerController : MPVLib.EventObserver {
     private var queue: List<Track> = emptyList()
     private var queueIndex = -1
     private var initialized = false
+    private var bootstrapped = false
+
+    private lateinit var snapshots: PlaybackSnapshotStore
+
+    /**
+     * What the last successful write contained — not the live state. Keeping "last written"
+     * rather than "current" is what makes the position throttle in [mirrorStateToDisk] work.
+     */
+    private var savedQueue: List<Track>? = null
+    private var savedIndex = -1
+    private var savedUri: String? = null
+    private var savedPositionMs = 0L
+    private var savedPlaying = false
+
+    private val diskLock = Mutex()
+
+    /**
+     * True while [queue] came off disk and mpv has not opened the file yet. The restored
+     * session is visible everywhere (mini player, queue screen, lyrics) but stays silent —
+     * and keeps the foreground service off — until the user actually asks for playback.
+     */
+    private var pendingRestore = false
+
+    /**
+     * Resume point handed to the `time-pos` observer. mpv only reports a position once the
+     * file is really open, so a seek issued right after `loadfile` would be dropped; parking
+     * the target here makes the seek land on the first report instead.
+     */
+    private var pendingSeekMs = 0L
 
     // ---- sleep timer ----
     private val _sleep = MutableStateFlow(SleepState())
@@ -43,6 +76,24 @@ object PlayerController : MPVLib.EventObserver {
     fun init(context: Context) {
         if (initialized) return
         appContext = context.applicationContext
+
+        // Restore + persistence are plain Kotlin state, so they are wired up before the
+        // native library is touched: even if libmpv refuses to load, the previous queue is
+        // still restored and the failure is reported by the catch below.
+        //
+        // The queue is a few hundred KB of JSON, so it is read off the main thread — the UI
+        // starts empty for a frame and fills in as soon as the snapshot lands. Mirroring only
+        // starts once the restore is in: subscribing before that would report the empty state
+        // as a change and wipe the snapshot it is about to read.
+        if (!bootstrapped) {
+            bootstrapped = true
+            snapshots = PlaybackSnapshotStore(appContext)
+            scope.launch(Dispatchers.IO) {
+                restoreLastSession()
+                mirrorStateToDisk()
+            }
+        }
+
         try {
             MPVLib.create(appContext)
             // --- audio-only tuning (no video pipeline at all) ---
@@ -89,6 +140,9 @@ object PlayerController : MPVLib.EventObserver {
 
     private fun loadCurrent(replace: Boolean = true) {
         val t = queue.getOrNull(queueIndex) ?: return
+        // An explicit load always supersedes a restored-but-never-played session.
+        pendingRestore = false
+        pendingSeekMs = 0
         try {
             MPVLib.command(arrayOf("loadfile", t.uri, if (replace) "replace" else "append"))
         } catch (e: Throwable) {
@@ -102,7 +156,14 @@ object PlayerController : MPVLib.EventObserver {
         ensureServiceRunning()
     }
 
-    fun togglePlay() = MPVLib.command(arrayOf("cycle", "pause"))
+    fun togglePlay() {
+        val restored = takeRestoreTarget()
+        if (restored != null) {
+            openRestored(restored)
+            return
+        }
+        MPVLib.command(arrayOf("cycle", "pause"))
+    }
 
     fun pause() {
         MPVLib.setPropertyBoolean("pause", true)
@@ -110,6 +171,11 @@ object PlayerController : MPVLib.EventObserver {
     }
 
     fun resume() {
+        val restored = takeRestoreTarget()
+        if (restored != null) {
+            openRestored(restored)
+            return
+        }
         MPVLib.setPropertyBoolean("pause", false)
         _state.update { it.copy(isPlaying = true) }
         ensureServiceRunning()
@@ -130,7 +196,7 @@ object PlayerController : MPVLib.EventObserver {
     fun prev() {
         if (queue.isEmpty()) return
         // QQ Music behavior: if >3s in, restart current; else go previous.
-        if (_state.value.positionMs > 3000) {
+        if (_state.value.positionMs > RESTART_THRESHOLD_MS) {
             seekTo(0)
             return
         }
@@ -192,10 +258,20 @@ object PlayerController : MPVLib.EventObserver {
             // Current track removed - load the track at same index (or previous if at end)
             queueIndex = index.coerceIn(0, queue.lastIndex)
             _state.update { it.copy(playlist = queue, index = queueIndex) }
-            if (queue.isNotEmpty()) {
-                loadCurrent(replace = true)
-            } else {
+            if (queue.isEmpty()) {
+                pendingRestore = false
+                pendingSeekMs = 0
                 _state.update { it.copy(current = null, isPlaying = false) }
+            } else if (pendingRestore) {
+                // Restored session that was never played: nothing is loaded in mpv, so just
+                // move the cursor onto the replacement track instead of starting playback.
+                val next = queue[queueIndex]
+                pendingSeekMs = 0
+                _state.update {
+                    it.copy(current = next, positionMs = 0, durationMs = next.durationMs)
+                }
+            } else {
+                loadCurrent(replace = true)
             }
         } else if (index < queueIndex) {
             // Removed a track before current - adjust index
@@ -277,9 +353,16 @@ object PlayerController : MPVLib.EventObserver {
     // ---- MPVLib.EventObserver ----
 
     override fun eventProperty(property: String, value: Long) {
-        if (property == "time-pos") {
-            _state.update { it.copy(positionMs = value * 1000) }
+        if (property != "time-pos") return
+        val target = pendingSeekMs
+        if (target > 0) {
+            // First report after a restored load: mpv holds an open file now, so the resume
+            // point can finally be applied. Seeking before this point gets silently dropped.
+            pendingSeekMs = 0
+            seekTo(clampSeek(target))
+            return
         }
+        _state.update { it.copy(positionMs = value * 1000) }
     }
 
     override fun eventProperty(property: String, value: Boolean) {
@@ -320,6 +403,162 @@ object PlayerController : MPVLib.EventObserver {
         }
     }
 
+    // ---- session persistence ----
+
+    private data class Restored(val track: Track, val positionMs: Long)
+
+    /**
+     * Put the last session back on screen: its queue, which track was current and how far into
+     * it the user got. Deliberately does not open the file or start the foreground service —
+     * the app comes up silent, exactly as it was left, and the first press of play picks the
+     * song up at the saved position.
+     */
+    private fun restoreLastSession() {
+        // Should the app have started playing something while this was reading, that wins.
+        if (queue.isNotEmpty() || _state.value.current != null) return
+
+        val tracks = snapshots.loadQueue()
+        if (tracks.isEmpty()) {
+            snapshots.clearCursor()
+            return
+        }
+        val cursor = snapshots.loadCursor()
+        val index = resolveIndex(tracks, cursor)
+        val track = tracks[index]
+        val position = cursor?.positionMs?.coerceAtLeast(0L) ?: 0L
+
+        queue = tracks
+        queueIndex = index
+        pendingRestore = true
+        pendingSeekMs = 0
+
+        // Mark the snapshot as already on disk first, so the mirror below does not
+        // immediately write back what it just read.
+        savedQueue = tracks
+        savedIndex = index
+        savedUri = track.uri
+        savedPositionMs = position
+        savedPlaying = false
+
+        _state.update {
+            it.copy(
+                isPlaying = false,
+                current = track,
+                positionMs = position,
+                durationMs = track.durationMs,
+                playlist = tracks,
+                index = index,
+            )
+        }
+        Log.i(TAG, "restored session: ${tracks.size} tracks, #$index, ${position / 1000}s in")
+    }
+
+    /**
+     * The saved index is only trusted when the track it pointed at is still identifiable by
+     * URI, so a queue that changed on disk falls back to its first track instead of landing on
+     * whatever happens to sit at that offset.
+     */
+    private fun resolveIndex(tracks: List<Track>, cursor: PlaybackSnapshotStore.Cursor?): Int {
+        if (cursor == null) return 0
+        val byUri = tracks.indexOfFirst { it.uri == cursor.uri }
+        return when {
+            byUri >= 0 -> byUri
+            cursor.index in tracks.indices -> cursor.index
+            else -> 0
+        }
+    }
+
+    /**
+     * Mirror live state to disk as it changes. Hooked onto the state flow rather than onto
+     * every mutator, so transitions nobody calls directly — auto-advance from [eventEndFile],
+     * running off the end of the queue — are covered too.
+     *
+     * The position ticks about once a second while playing, so writes are throttled: the queue
+     * only when the list changed, the cursor on anything that stops the clock (track change,
+     * play/pause) and otherwise every [POSITION_SAVE_MS] of playback.
+     */
+    private fun mirrorStateToDisk() {
+        scope.launch {
+            _state.collect { st ->
+                if (savedQueue != st.playlist) {
+                    savedQueue = st.playlist
+                    writeToDisk { snapshots.saveQueue(st.playlist) }
+                }
+
+                val uri = st.current?.uri
+                if (uri == null) {
+                    if (savedUri != null) {
+                        savedUri = null
+                        writeToDisk { snapshots.clearCursor() }
+                    }
+                    return@collect
+                }
+
+                val due = uri != savedUri ||
+                    st.index != savedIndex ||
+                    st.isPlaying != savedPlaying ||
+                    abs(st.positionMs - savedPositionMs) >= POSITION_SAVE_MS
+                if (!due) return@collect
+
+                savedIndex = st.index
+                savedUri = uri
+                savedPlaying = st.isPlaying
+                savedPositionMs = st.positionMs
+                writeToDisk { snapshots.saveCursor(st.index, st.positionMs, uri) }
+            }
+        }
+    }
+
+    /** Disk writes are serialised: the state flow can schedule two of them in one frame. */
+    private fun writeToDisk(block: () -> Unit) {
+        scope.launch(Dispatchers.IO) {
+            diskLock.withLock {
+                runCatching(block)
+                    .onFailure { Log.w(TAG, "failed to persist playback state", it) }
+            }
+        }
+    }
+
+    /** Consumes the restored-session marker; null when mpv already holds the current track. */
+    private fun takeRestoreTarget(): Restored? {
+        if (!pendingRestore) return null
+        pendingRestore = false
+        val track = queue.getOrNull(queueIndex) ?: return null
+        return Restored(track, _state.value.positionMs.coerceAtLeast(0L))
+    }
+
+    /**
+     * Open the file behind a restored session and hand the resume point to the observer
+     * (see [pendingSeekMs]). A resume point of only a few seconds is dropped — restarting the
+     * song beats starting one second in.
+     */
+    private fun openRestored(restored: Restored) {
+        try {
+            MPVLib.command(arrayOf("loadfile", restored.track.uri, "replace"))
+        } catch (e: Throwable) {
+            Log.w(TAG, "restore loadfile failed for ${restored.track.uri.take(120)}", e)
+            return
+        }
+        val resumeAt = if (restored.positionMs > RESTART_THRESHOLD_MS) restored.positionMs else 0L
+        pendingSeekMs = resumeAt
+        _state.update {
+            it.copy(
+                current = restored.track,
+                isPlaying = true,
+                positionMs = resumeAt,
+                durationMs = restored.track.durationMs,
+            )
+        }
+        ensureServiceRunning()
+    }
+
+    /** Keeps a resume point away from the end, where the seek would simply finish the track. */
+    private fun clampSeek(ms: Long): Long {
+        val duration = _state.value.durationMs
+        if (duration <= 0) return ms
+        return ms.coerceIn(0, (duration - END_GUARD_MS).coerceAtLeast(0))
+    }
+
     private fun ensureServiceRunning() {
         runCatching {
             val intent = Intent(appContext, PlaybackService::class.java)
@@ -334,4 +573,13 @@ object PlayerController : MPVLib.EventObserver {
     }
 
     private const val TICK_MS = 500L
+
+    /** From here on, "restart this track" reads better than "resume where you were". */
+    private const val RESTART_THRESHOLD_MS = 3000L
+
+    /** Most playback that can be lost if the process dies between two snapshot writes. */
+    private const val POSITION_SAVE_MS = 4000L
+
+    /** Keeps a resume seek out of the closing seconds, where it would just end the track. */
+    private const val END_GUARD_MS = 2000L
 }
