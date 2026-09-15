@@ -44,6 +44,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import coil.compose.AsyncImage
 import com.amusic.MainApplication
 import com.amusic.R
@@ -77,6 +78,13 @@ fun MiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
     }
 
     val glow = remember(track.title) { songGlow(accent, track.title).first }
+
+    // The mini player is drawn outside the NavHost and stays on screen for every route
+    // except now-playing — including the queue itself. So the queue button has to be a
+    // *toggle*: without this, every tap pushed another play_queue entry and the user had
+    // to press back once per tap to get out.
+    val navBackStackEntry by nav.currentBackStackEntryAsState()
+    val onQueue = navBackStackEntry?.destination?.route == Routes.PLAY_QUEUE
 
     Column(
         modifier = modifier
@@ -153,8 +161,18 @@ fun MiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
         IconButton(onClick = { PlayerController.next() }) {
             Icon(Icons.Filled.SkipNext, contentDescription = "下一首", tint = TextPrimary)
         }
-        IconButton(onClick = { nav.navigate(Routes.PLAY_QUEUE) }) {
-            Icon(Icons.Filled.QueueMusic, contentDescription = "播放列表", tint = TextSecondary)
+        IconButton(onClick = {
+            if (onQueue) {
+                nav.popBackStack()
+            } else {
+                nav.navigate(Routes.PLAY_QUEUE) { launchSingleTop = true }
+            }
+        }) {
+            Icon(
+                Icons.Filled.QueueMusic,
+                contentDescription = if (onQueue) "关闭播放列表" else "播放列表",
+                tint = if (onQueue) accent.accent else TextSecondary,
+            )
         }
     }
     }
