@@ -1,5 +1,6 @@
 package com.amusic.ui.library
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,12 +11,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,9 +26,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.PlayCircle
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.PlayArrow
@@ -38,6 +48,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.Tab
@@ -55,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -75,9 +87,18 @@ import com.amusic.ui.theme.AuroraBackground
 import com.amusic.ui.theme.LocalAccent
 import com.amusic.ui.theme.TextPrimary
 import com.amusic.ui.theme.TextSecondary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.Collator
 import java.util.Locale
+
+/**
+ * One-shot "scroll the list to [index]" request. [seq] is bumped on every click so the
+ * consumer's [androidx.compose.runtime.LaunchedEffect] re-runs even when the target index
+ * hasn't changed — without it, a second click on the same song would be a no-op because
+ * the state value would be identical.
+ */
+data class ScrollRequest(val index: Int, val seq: Long)
 
 @Composable
 fun LibraryScreen(nav: NavHostController) {
@@ -94,6 +115,8 @@ fun LibraryScreen(nav: NavHostController) {
     var tab by remember { mutableStateOf(0) }
     var query by remember { mutableStateOf("") }
     var pendingSong by remember { mutableStateOf<Song?>(null) }
+    var scrollRequest by remember { mutableStateOf<ScrollRequest?>(null) }
+    var scrollSeq by remember { mutableStateOf(0L) }
 
     // CJK-aware ordering: plain Unicode compare puts 中文 in code-point order, which
     // looks random; Collator sorts it the way a Chinese user expects.
@@ -113,89 +136,139 @@ fun LibraryScreen(nav: NavHostController) {
     val artistCounts = remember(songs) { songs.groupBy { it.artist }.mapValues { it.value.size } }
 
     val openArtist: (String) -> Unit = { nav.navigate(Routes.artist(it)) }
+    val playing by PlayerController.state.collectAsState()
 
     AuroraBackground(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("音乐馆", style = MaterialTheme.typography.headlineSmall, color = TextPrimary)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    "${songs.size} 首",
-                    color = TextSecondary,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            Spacer(Modifier.size(8.dp))
-
-            LibrarySearchField(query = query, onQuery = { query = it })
-
-            ScrollableTabRow(
-                selectedTabIndex = tab,
-                edgePadding = 16.dp,
-                containerColor = Color.Transparent,
-                contentColor = accent.accent,
-            ) {
-                listOf("歌曲", "歌手", "歌单", "收藏").forEachIndexed { i, label ->
-                    Tab(
-                        selected = tab == i,
-                        onClick = { tab = i },
-                        text = {
-                            Text(
-                                label,
-                                color = if (tab == i) accent.accent else TextSecondary,
-                                style = MaterialTheme.typography.titleMedium,
-                            )
-                        },
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("音乐馆", style = MaterialTheme.typography.headlineSmall, color = TextPrimary)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "${songs.size} 首",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
                     )
                 }
-            }
 
-            when (tab) {
-                0 -> Column(Modifier.fillMaxSize()) {
-                    SortRow(
-                        sort = sort,
-                        shown = shownSongs.size,
-                        total = songs.size,
-                        onSort = { app.settings.setLibSort(it) },
-                    )
-                    if (shownSongs.isEmpty()) {
-                        EmptyHint(if (q.isEmpty()) "曲库还是空的，去「发现」下载或扫一遍本地音乐" else "没有匹配「$q」的歌曲")
-                    } else {
-                        SongListContent(
-                            songs = shownSongs,
-                            onPlay = { idx -> playAll(shownSongs, idx) },
-                            onAdd = { pendingSong = it },
-                            onArtistClick = openArtist,
-                            selectionEnabled = true,
-                            modifier = Modifier.weight(1f),
+                Spacer(Modifier.size(8.dp))
+
+                LibrarySearchField(query = query, onQuery = { query = it })
+
+                ScrollableTabRow(
+                    selectedTabIndex = tab,
+                    edgePadding = 16.dp,
+                    containerColor = Color.Transparent,
+                    contentColor = accent.accent,
+                ) {
+                    listOf("歌曲", "歌手", "歌单", "收藏").forEachIndexed { i, label ->
+                        Tab(
+                            selected = tab == i,
+                            onClick = { tab = i },
+                            text = {
+                                Text(
+                                    label,
+                                    color = if (tab == i) accent.accent else TextSecondary,
+                                    style = MaterialTheme.typography.titleMedium,
+                                )
+                            },
                         )
                     }
                 }
 
-                1 -> if (shownArtists.isEmpty()) {
-                    EmptyHint(if (q.isEmpty()) "还没有识别到歌手" else "没有匹配「$q」的歌手")
-                } else {
-                    ArtistListContent(shownArtists, artistCounts, openArtist)
-                }
+                when (tab) {
+                    0 -> Column(Modifier.fillMaxSize()) {
+                        SortRow(
+                            sort = sort,
+                            shown = shownSongs.size,
+                            total = songs.size,
+                            onSort = { app.settings.setLibSort(it) },
+                        )
+                        if (shownSongs.isEmpty()) {
+                            EmptyHint(if (q.isEmpty()) "曲库还是空的，去「发现」下载或扫一遍本地音乐" else "没有匹配「$q」的歌曲")
+                        } else {
+                            SongListContent(
+                                songs = shownSongs,
+                                onPlay = { idx -> playAll(shownSongs, idx) },
+                                onAdd = { pendingSong = it },
+                                onArtistClick = openArtist,
+                                selectionEnabled = true,
+                                scrollRequest = scrollRequest,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
 
-                2 -> PlaylistListContent(
-                    shownPlaylists,
-                    onPlaylist = { nav.navigate(Routes.playlist(it.id)) },
-                    onCreate = { scope.launch { repo.createPlaylist(it) } },
-                )
+                    1 -> if (shownArtists.isEmpty()) {
+                        EmptyHint(if (q.isEmpty()) "还没有识别到歌手" else "没有匹配「$q」的歌手")
+                    } else {
+                        ArtistListContent(shownArtists, artistCounts, openArtist)
+                    }
 
-                else -> if (shownFavorites.isEmpty()) {
-                    EmptyHint(
-                        if (q.isEmpty()) "还没有收藏的歌曲，点歌曲右侧的 ♥ 收藏"
-                        else "收藏里没有匹配「$q」的歌曲"
+                    2 -> PlaylistListContent(
+                        shownPlaylists,
+                        onPlaylist = { nav.navigate(Routes.playlist(it.id)) },
+                        onCreate = { scope.launch { repo.createPlaylist(it) } },
                     )
-                } else {
-                    FavoriteTabContent(shownFavorites, onAdd = { pendingSong = it }, onArtistClick = openArtist)
+
+                    else -> if (shownFavorites.isEmpty()) {
+                        EmptyHint(
+                            if (q.isEmpty()) "还没有收藏的歌曲，点歌曲右侧的 ♥ 收藏"
+                            else "收藏里没有匹配「$q」的歌曲"
+                        )
+                    } else {
+                        FavoriteTabContent(shownFavorites, onAdd = { pendingSong = it }, onArtistClick = openArtist)
+                    }
                 }
+            }
+
+            // Floating button to jump to now-playing screen.
+            // Always shown so the user can find the player regardless of playback state.
+            // The mini-player (in AppNav) only appears when something is playing, so a
+            // dedicated entry point here means the user is never "locked out" of the
+            // now-playing screen. Sits above the mini-player / tab bar by virtue of being
+            // inside the content Box.
+            //
+            // Visual contract:
+            //  - a compact circular crosshair-like FAB so it reads as "locate the current
+            //    song" at a glance, without covering rows with a wide pill.
+            //  - containerColor is always full accent (no alpha fade) so the FAB doesn't
+            //    disappear into the aurora background.
+            //  - icon switches between PlayCircle (idle) and GraphicEq (something is
+            //    loaded) so the user can tell whether anything is queued.
+            //  - bottom padding is bumped above the mini-player's ~56dp height so the
+            //    FAB never overlaps the play controls even when both are visible.
+            FloatingActionButton(
+                onClick = {
+                    val current = playing.current
+                    if (tab == 0 && current != null) {
+                        val idx = shownSongs.indexOfFirst { it.id == current.songId }
+                        if (idx >= 0) {
+                            scrollSeq++
+                            scrollRequest = ScrollRequest(idx, scrollSeq)
+                        } else {
+                            nav.navigate(Routes.NOW_PLAYING)
+                        }
+                    } else {
+                        nav.navigate(Routes.NOW_PLAYING)
+                    }
+                },
+                containerColor = accent.accent,
+                contentColor = Color.White,
+                shape = CircleShape,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 80.dp),
+            ) {
+                Icon(
+                    if (playing.current != null) Icons.Filled.GraphicEq
+                    else Icons.Filled.PlayCircle,
+                    contentDescription = if (playing.current != null) "定位正在播放" else "跳到播放页",
+                    modifier = Modifier.size(26.dp),
+                )
             }
         }
     }
@@ -359,6 +432,7 @@ internal fun SongListContent(
     onAdd: (Song) -> Unit,
     onArtistClick: ((String) -> Unit)? = null,
     selectionEnabled: Boolean = false,
+    scrollRequest: ScrollRequest? = null,
     modifier: Modifier = Modifier,
 ) {
     val app = LocalContext.current.applicationContext as MainApplication
@@ -366,12 +440,31 @@ internal fun SongListContent(
     val favPaths by repo.favoritePaths.collectAsState(initial = emptySet())
     val playlists by repo.playlists.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
+    val lazyListState = rememberLazyListState()
     var detailSong by remember { mutableStateOf<Song?>(null) }
+    // Index of the row currently being highlighted by a "locate current song" request.
+    var highlightIndex by remember { mutableStateOf<Int?>(null) }
+
+    // Scroll to (and briefly highlight) the target item whenever the parent asks, e.g. via
+    // the crosshair FAB. [ScrollRequest.seq] differs on every click so this re-runs even
+    // when the target index is unchanged.
+    LaunchedEffect(scrollRequest) {
+        scrollRequest?.let { req ->
+            if (req.index in songs.indices) {
+                highlightIndex = req.index
+                lazyListState.animateScrollToItem(req.index)
+                delay(1600)
+                highlightIndex = null
+            }
+        }
+    }
 
     var selectionMode by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var showAddMany by remember { mutableStateOf(false) }
-    var showTrashConfirm by remember { mutableStateOf(false) }
+    // Songs waiting for the 从列表移除 / 删除文件 choice — one row from the long-press
+    // menu, or the whole selection from the bulk bar.
+    var deleteTargets by remember { mutableStateOf<List<Song>?>(null) }
 
     // Filtering or leaving the tab can drop rows out from under the selection.
     LaunchedEffect(songs) {
@@ -389,6 +482,9 @@ internal fun SongListContent(
         selected = emptySet()
     }
 
+    // System back first leaves multi-select instead of leaving the screen.
+    BackHandler(enabled = selectionMode) { exitSelection() }
+
     Column(modifier.fillMaxSize()) {
         if (selectionMode) {
             SelectionHeader(
@@ -400,11 +496,12 @@ internal fun SongListContent(
             )
         }
 
-        LazyColumn(Modifier.weight(1f)) {
+        LazyColumn(Modifier.weight(1f), state = lazyListState) {
             itemsIndexed(songs, key = { _, s -> s.id }) { idx, song ->
                 SongRow(
                     song = song,
                     isFavorite = song.data in favPaths,
+                    highlighted = highlightIndex == idx,
                     onClick = { onPlay(idx) },
                     onToggleFavorite = { scope.launch { repo.toggleFavorite(song.id, song.data) } },
                     onAddToPlaylist = { onAdd(song) },
@@ -415,8 +512,29 @@ internal fun SongListContent(
                     onToggleSelect = {
                         selected = if (song.id in selected) selected - song.id else selected + song.id
                     },
-                    onLongClick = if (selectionEnabled) {
-                        { selectionMode = true; selected = setOf(song.id) }
+                    menu = if (selectionEnabled) {
+                        {
+                            DropdownMenuItem(
+                                text = { Text("加入歌单", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Filled.PlaylistAdd, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },
+                                onClick = { closeMenu(); onAdd(song) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("查看详情", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Filled.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },
+                                onClick = { closeMenu(); detailSong = song },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("多选", color = TextPrimary) },
+                                leadingIcon = { Icon(Icons.Filled.DoneAll, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },
+                                onClick = { closeMenu(); selectionMode = true; selected = setOf(song.id) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除…", color = Color(0xFFE57373)) },
+                                leadingIcon = { Icon(Icons.Filled.Delete, contentDescription = null, tint = Color(0xFFE57373), modifier = Modifier.size(18.dp)) },
+                                onClick = { closeMenu(); deleteTargets = listOf(song) },
+                            )
+                        }
                     } else null,
                 )
             }
@@ -433,7 +551,7 @@ internal fun SongListContent(
                         if (allLiked) repo.unlike(target) else repo.like(target)
                     }
                 },
-                onTrash = { if (chosen.isNotEmpty()) showTrashConfirm = true },
+                onDelete = { if (chosen.isNotEmpty()) deleteTargets = chosen },
             )
         }
     }
@@ -468,26 +586,60 @@ internal fun SongListContent(
         },
     )
 
-    if (showTrashConfirm) {
+    // The one delete entry point — offers "remove from list (file kept, restorable in the
+    // trash)" vs "delete the audio file (gone for good)".
+    deleteTargets?.let { targets ->
+        val danger = Color(0xFFE57373)
         AlertDialog(
-            onDismissRequest = { showTrashConfirm = false },
-            title = { Text("移入回收站", color = TextPrimary) },
+            onDismissRequest = { deleteTargets = null },
+            title = { Text("删除 ${targets.size} 首歌曲", color = TextPrimary) },
             text = {
-                Text(
-                    "已选 ${chosen.size} 首。文件不会被删除，之后可以在「我的 → 回收站」里恢复。",
-                    color = TextSecondary,
-                )
+                Column {
+                    Text(
+                        "从列表移除",
+                        color = LocalAccent.current.accent,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                val t = targets
+                                deleteTargets = null
+                                exitSelection()
+                                scope.launch { repo.moveToTrash(t) }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                    )
+                    Text(
+                        "保留音频文件，之后可在「我的 → 回收站」恢复",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "删除文件",
+                        color = danger,
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable {
+                                val t = targets
+                                deleteTargets = null
+                                exitSelection()
+                                scope.launch { repo.purge(t) }
+                            }
+                            .padding(horizontal = 4.dp, vertical = 8.dp),
+                    )
+                    Text(
+                        "同时把音频文件从磁盘删除，不可恢复",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    val target = chosen
-                    showTrashConfirm = false
-                    scope.launch { repo.moveToTrash(target) }
-                    exitSelection()
-                }) { Text("移入回收站", color = LocalAccent.current.accent) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTrashConfirm = false }) { Text("取消", color = TextPrimary) }
+                TextButton(onClick = { deleteTargets = null }) { Text("取消", color = TextPrimary) }
             },
         )
     }
@@ -530,7 +682,7 @@ private fun SelectionActionBar(
     allLiked: Boolean,
     onPlaylist: () -> Unit,
     onFavorite: () -> Unit,
-    onTrash: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     val accent = LocalAccent.current
     Row(
@@ -559,10 +711,10 @@ private fun SelectionActionBar(
         )
         SelectionAction(
             icon = Icons.Filled.DeleteSweep,
-            label = "移入回收站",
+            label = "删除",
             tint = Color(0xFFE57373),
             enabled = count > 0,
-            onClick = onTrash,
+            onClick = onDelete,
         )
     }
 }

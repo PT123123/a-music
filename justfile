@@ -11,11 +11,11 @@
 #   just install tablet     Install to the tablet
 #   just devices            List connected ADB devices
 
-set shell := ["bash", "-c"]
+set shell := ["pwsh", "-NoProfile", "-NonInteractive", "-Command"]
 
 # Build the debug APK.
 build:
-    ./gradlew assembleDebug
+    if (Test-Path ./gradlew.bat) { ./gradlew.bat assembleDebug } else { ./gradlew assembleDebug }
 
 # List connected ADB devices (debug helper).
 devices:
@@ -27,4 +27,4 @@ devices:
 #   TABLET_SERIAL=abc123 just install tablet
 #   PHONE_SERIAL=def456  just install phone
 install target="": build
-    @bash ./scripts/install.sh "{{target}}"
+    pwsh ./scripts/install.ps1 "{{target}}"

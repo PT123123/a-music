@@ -12,6 +12,7 @@ object Routes {
     const val FAVORITES = "favorites"
     const val SETTINGS = "settings"
     const val TRASH = "trash"
+    const val PLAY_QUEUE = "play_queue"
 
     /**
      * Build the concrete route for one artist. Names come from ID3 tags and routinely

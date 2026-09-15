@@ -20,11 +20,16 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,14 +48,20 @@ import com.amusic.ui.theme.QQGreen
 import com.amusic.ui.theme.TextPrimary
 import com.amusic.ui.theme.TextSecondary
 
+/** Receiver for [SongRow]'s long-press menu. M3 dropdown items don't close the popup on
+ * click, so every item's onClick must call [closeMenu] first. */
+class SongRowMenuScope internal constructor(private val onClose: () -> Unit) {
+    fun closeMenu() = onClose()
+}
+
 /**
  * A single library row: artwork (tap = details), title/artist, like-heart and
  * "add to playlist". Tapping the text area starts playback; tapping the artist
  * name (when [onArtistClick] is supplied) opens that artist's page instead.
  *
- * In [selectionMode] the row becomes a checkbox: tapping anywhere toggles [selected] and the
- * per-row actions are hidden. Long-pressing outside selection mode calls [onLongClick], which
- * is how the library enters that mode.
+ * Long-pressing (outside selection mode) opens [menu] as a dropdown anchored to the row —
+ * callers put 加入歌单 / 详情 / 多选 / 删除 in there. In [selectionMode] the row becomes a
+ * checkbox: tapping anywhere toggles [selected] and the per-row actions are hidden.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -64,12 +75,14 @@ fun SongRow(
     onArtistClick: ((String) -> Unit)? = null,
     selectionMode: Boolean = false,
     selected: Boolean = false,
+    highlighted: Boolean = false,
     onToggleSelect: (() -> Unit)? = null,
-    onLongClick: (() -> Unit)? = null,
+    menu: (@Composable SongRowMenuScope.() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val accent = LocalAccent.current
     val context = LocalContext.current
+    var menuOpen by remember { mutableStateOf(false) }
     // `<unknown>` is what the MediaStore scanner writes when a file has no artist tag —
     // there is nothing to navigate to in that case.
     val linkArtist = onArtistClick?.takeIf {
@@ -80,10 +93,20 @@ fun SongRow(
             .fillMaxWidth()
             .padding(horizontal = 6.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(12.dp))
-            .background(if (selected) accent.accent.copy(alpha = 0.14f) else Color.Transparent)
+            .background(
+                when {
+                    selected -> accent.accent.copy(alpha = 0.14f)
+                    highlighted && !selectionMode -> accent.accent.copy(alpha = 0.20f)
+                    else -> Color.Transparent
+                }
+            )
             .combinedClickable(
                 onClick = { if (selectionMode) onToggleSelect?.invoke() else onClick() },
-                onLongClick = if (selectionMode) null else onLongClick,
+                onLongClick = if (selectionMode || menu == null) {
+                    null
+                } else {
+                    { menuOpen = true }
+                },
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -135,7 +158,7 @@ fun SongRow(
         ) {
             Text(
                 song.title,
-                color = TextPrimary,
+                color = if (highlighted && !selectionMode) accent.accent else TextPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodyLarge,
@@ -179,6 +202,12 @@ fun SongRow(
             }
             IconButton(onClick = onAddToPlaylist) {
                 Icon(Icons.Filled.Add, contentDescription = "添加到歌单", tint = QQGreen)
+            }
+            if (menu != null) {
+                val menuScope = remember(menu) { SongRowMenuScope(onClose = { menuOpen = false }) }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    menuScope.menu()
+                }
             }
         } else {
             Spacer(Modifier.width(6.dp))

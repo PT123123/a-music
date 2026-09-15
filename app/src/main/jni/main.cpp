@@ -4,7 +4,9 @@
 #include <time.h>
 #include <locale.h>
 #include <atomic>
+#include <dlfcn.h>
 
+#include <android/fdsan.h>
 #include <mpv/client.h>
 
 #include <pthread.h>
@@ -30,6 +32,29 @@ std::atomic<bool> g_event_thread_request_exit(false);
 static pthread_t event_thread_id;
 static jobject global_appctx;
 
+// Rapid track switches make mpv / AudioTrack rebuild the audio chain while the previous
+// one is still tearing down. On some devices that races fd ownership inside the driver
+// stack and trips Android's fdsan, whose default level (FATAL) aborts the whole process —
+// the app dies mid-试听. This is the same crash class as the Adreno GL driver's fdsan
+// abort that forced software bitmaps. Downgrade to WARN_ALWAYS (log, don't abort); the
+// functions only exist on API 29+, so resolve them dynamically for older devices.
+// NOTE: the symbols are android_fdsan_set_error_level / android_fdsan_get_error_level —
+// without the android_ prefix dlsym silently finds nothing.
+static void relax_fdsan() {
+    using SetLevelFn = int (*)(int);
+    using GetLevelFn = int (*)();
+    void *set_sym = dlsym(RTLD_DEFAULT, "android_fdsan_set_error_level");
+    if (!set_sym) {
+        ALOGE("android_fdsan_set_error_level unavailable (pre-API 29); fdsan stays at default");
+        return;
+    }
+    reinterpret_cast<SetLevelFn>(set_sym)(ANDROID_FDSAN_ERROR_LEVEL_WARN_ALWAYS);
+    if (void *get_sym = dlsym(RTLD_DEFAULT, "android_fdsan_get_error_level")) {
+        int level = reinterpret_cast<GetLevelFn>(get_sym)();
+        ALOGE("fdsan relaxed: level is now %d (2 == WARN_ALWAYS)", level);
+    }
+}
+
 static void prepare_environment(JNIEnv *env, jobject appctx) {
     setlocale(LC_NUMERIC, "C");
 
@@ -49,6 +74,7 @@ jni_func(void, create, jobject appctx) {
     if (g_mpv)
         die("mpv is already initialized");
 
+    relax_fdsan();
     prepare_environment(env, appctx);
 
     g_mpv = mpv_create();

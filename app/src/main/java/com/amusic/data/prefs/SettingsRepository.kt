@@ -72,6 +72,10 @@ class SettingsRepository(context: Context) {
     private val _desktopLyrics = MutableStateFlow(prefs.getBoolean(KEY_DESKTOP_LYRICS, false))
     val desktopLyrics: StateFlow<Boolean> = _desktopLyrics.asStateFlow()
 
+    /** Text scale of the now-playing lyrics view (1f = typography defaults). */
+    private val _lyricsScale = MutableStateFlow(prefs.getFloat(KEY_LYRICS_SCALE, 1f))
+    val lyricsScale: StateFlow<Float> = _lyricsScale.asStateFlow()
+
     fun setLyricsInNotification(on: Boolean) {
         prefs.edit().putBoolean(KEY_LYRICS_NOTIF, on).apply()
         _lyricsInNotification.value = on
@@ -80,6 +84,12 @@ class SettingsRepository(context: Context) {
     fun setDesktopLyrics(on: Boolean) {
         prefs.edit().putBoolean(KEY_DESKTOP_LYRICS, on).apply()
         _desktopLyrics.value = on
+    }
+
+    fun setLyricsScale(scale: Float) {
+        val v = scale.coerceIn(LYRICS_SCALE_MIN, LYRICS_SCALE_MAX)
+        prefs.edit().putFloat(KEY_LYRICS_SCALE, v).apply()
+        _lyricsScale.value = v
     }
 
     // ---- equalizer ----
@@ -188,6 +198,10 @@ class SettingsRepository(context: Context) {
         /** Band count; kept next to the prefs code so the CSV length check stays honest. */
         const val EQ_BANDS = 8
 
+        /** Bounds of the lyrics text scale, also used to enable/disable the A− / A+ buttons. */
+        const val LYRICS_SCALE_MIN = 0.7f
+        const val LYRICS_SCALE_MAX = 1.8f
+
         private const val PREFS = "amusic_settings"
         private const val KEY_STYLE = "player_style"
         private const val KEY_ACCENT = "accent_id"
@@ -198,6 +212,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_LIB_SORT = "lib_sort"
         private const val KEY_LYRICS_NOTIF = "lyrics_in_notification"
         private const val KEY_DESKTOP_LYRICS = "desktop_lyrics"
+        private const val KEY_LYRICS_SCALE = "lyrics_scale"
         private const val KEY_EQ_ON = "eq_enabled"
         private const val KEY_EQ_GAINS = "eq_gains"
         private const val KEY_EQ_PRESET = "eq_preset"

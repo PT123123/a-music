@@ -2,6 +2,7 @@ package com.amusic.ui.online
 
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -284,6 +285,9 @@ private fun QqSection(
     val history by settings.searchHistory.collectAsState()
 
     var query by remember { mutableStateOf("") }
+
+    // System back first clears the search field before leaving the tab.
+    BackHandler(enabled = query.isNotEmpty()) { query = "" }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<OnlineSong>>(emptyList()) }
@@ -429,6 +433,9 @@ private fun Net24Section(
     val history by settings.searchHistory.collectAsState()
 
     var query by remember { mutableStateOf("") }
+
+    // System back first clears the search field before leaving the tab.
+    BackHandler(enabled = query.isNotEmpty()) { query = "" }
     var loading by remember { mutableStateOf(false) }
     var searched by remember { mutableStateOf(false) }
     var results by remember { mutableStateOf<List<Net24Song>>(emptyList()) }

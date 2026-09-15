@@ -166,6 +166,81 @@ object PlayerController : MPVLib.EventObserver {
             .onFailure { Log.w(TAG, "mpv rejected audio filter '$af'", it) }
     }
 
+    // ---- Queue management ----
+
+    /** Add a track to the end of the queue. */
+    fun addToQueue(track: Track) {
+        queue = queue + track
+        _state.update { it.copy(playlist = queue) }
+    }
+
+    /** Add multiple tracks to the end of the queue. */
+    fun addToQueue(tracks: List<Track>) {
+        queue = queue + tracks
+        _state.update { it.copy(playlist = queue) }
+    }
+
+    /** Remove a track from the queue at [index]. */
+    fun removeFromQueue(index: Int) {
+        if (index < 0 || index >= queue.size) return
+        
+        val wasPlaying = index == queueIndex
+        
+        queue = queue.toMutableList().apply { removeAt(index) }
+        
+        if (wasPlaying) {
+            // Current track removed - load the track at same index (or previous if at end)
+            queueIndex = index.coerceIn(0, queue.lastIndex)
+            _state.update { it.copy(playlist = queue, index = queueIndex) }
+            if (queue.isNotEmpty()) {
+                loadCurrent(replace = true)
+            } else {
+                _state.update { it.copy(current = null, isPlaying = false) }
+            }
+        } else if (index < queueIndex) {
+            // Removed a track before current - adjust index
+            queueIndex--
+            _state.update { it.copy(playlist = queue, index = queueIndex) }
+        } else {
+            _state.update { it.copy(playlist = queue) }
+        }
+    }
+
+    /** Clear the queue (keeps current track playing). */
+    fun clearQueue() {
+        val current = queue.getOrNull(queueIndex)
+        queue = if (current != null) listOf(current) else emptyList()
+        queueIndex = if (current != null) 0 else -1
+        _state.update { it.copy(playlist = queue, index = queueIndex) }
+    }
+
+    /** Move a track from [fromIndex] to [toIndex] in the queue. */
+    fun moveInQueue(fromIndex: Int, toIndex: Int) {
+        if (fromIndex < 0 || fromIndex >= queue.size) return
+        if (toIndex < 0 || toIndex >= queue.size) return
+        
+        val mutableQueue = queue.toMutableList()
+        val track = mutableQueue.removeAt(fromIndex)
+        mutableQueue.add(toIndex, track)
+        queue = mutableQueue
+        
+        // Update current index if needed
+        queueIndex = when {
+            fromIndex == queueIndex -> toIndex
+            fromIndex < queueIndex && toIndex >= queueIndex -> queueIndex - 1
+            fromIndex > queueIndex && toIndex <= queueIndex -> queueIndex + 1
+            else -> queueIndex
+        }
+        
+        _state.update { it.copy(playlist = queue, index = queueIndex) }
+    }
+
+    /** Get current queue as a list of tracks. */
+    fun getQueue(): List<Track> = queue
+
+    /** Get current track index in queue. */
+    fun getCurrentIndex(): Int = queueIndex
+
     // ---- sleep timer ----
 
     /** Pause playback after [minutes] minutes. Replaces any running timer. */
