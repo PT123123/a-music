@@ -3,20 +3,23 @@ package com.amusic.ui.player
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -25,9 +28,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,22 +63,28 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp as lerpColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -110,6 +116,7 @@ import com.amusic.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.roundToInt
 
 private const val TAG = "NowPlaying"
@@ -713,10 +720,91 @@ private fun PlayerAction(
 // lyrics
 // ---------------------------------------------------------------------------
 
+/** Vertical gap between two lyric lines. */
+private val LYRIC_LINE_GAP = 14.dp
+
 /**
- * QQ-Music-style scrolling lyric view: the active line is highlighted in the accent
- * colour and kept centred, other lines are dimmed. Tapping a line seeks to it.
- * [scale] multiplies every font size (A− / A+ control on the lyrics page).
+ * Time constant of the scroll follower, in seconds. This is not a duration: the position eats
+ * ~63% of the remaining distance every [LYRIC_FOLLOW_TAU_S], so every move eases out and the
+ * feel does not depend on the frame rate.
+ */
+private const val LYRIC_FOLLOW_TAU_S = 0.17f
+
+/** A jump longer than this many viewports is not animated — a seek just lands. */
+private const val LYRIC_SNAP_VIEWPORTS = 1.3f
+
+/** How long the list stays where the finger left it before sliding back to the active line. */
+private const val LYRIC_HOLD_AFTER_DRAG_NANOS = 2_200_000_000L
+
+/**
+ * Scroll bookkeeping for the lyric view.
+ *
+ * [centreOf] is written by the layout pass and read by the animation loop, so the scroll target
+ * is arithmetic rather than a guess. Only [offsetPx] is snapshot state: it is the one value read
+ * while drawing, everything else is plain fields no composition ever observes.
+ */
+private class LyricScroll {
+    /** Line index -> the y of that line's centre inside the lyric column, in px. */
+    val centreOf = HashMap<Int, Float>()
+
+    /** Current translation of the column: how far it is pulled up, in px. */
+    val offsetPx = mutableFloatStateOf(0f)
+
+    var dragging = false
+    var holdUntilNanos = 0L
+    var primed = false
+    var lastFrameNanos = 0L
+
+    /** Where line [index] has to sit for its centre to land on the viewport's centre. */
+    fun offsetFor(index: Int, viewportPx: Float): Float? =
+        centreOf[index]?.let { it - viewportPx / 2f }
+
+    /** Index of the line nearest to [contentY] (a y in column coordinates), if measured yet. */
+    fun lineAt(contentY: Float): Int? {
+        var found = -1
+        var closest = Float.MAX_VALUE
+        centreOf.forEach { (index, centre) ->
+            val distance = abs(centre - contentY)
+            if (distance < closest) {
+                closest = distance
+                found = index
+            }
+        }
+        return if (found >= 0) found else null
+    }
+
+    /** Hand the position back to the song, but only a moment after the finger is gone. */
+    fun releaseForAWhile() {
+        dragging = false
+        holdUntilNanos = System.nanoTime() + LYRIC_HOLD_AFTER_DRAG_NANOS
+    }
+
+    /** Keep a drag inside the song: never past the first or the last line. */
+    fun clampToSong(offset: Float, viewportPx: Float, lastIndex: Int): Float {
+        val first = centreOf[0] ?: return offset
+        val last = centreOf[lastIndex] ?: return offset
+        return offset.coerceIn(
+            minOf(first, last) - viewportPx / 2f,
+            maxOf(first, last) - viewportPx / 2f,
+        )
+    }
+}
+
+/**
+ * QQ-Music-style scrolling lyric view: the line being sung sits dead centre in the lyric area,
+ * highlighted in the accent colour, with the rest dimmed. Tapping a line seeks to it and dragging
+ * browses by hand; a moment after the finger goes up the list slides back to the active line.
+ *
+ * Keeping the active line exactly centred is the reason this no longer scrolls a lazy list by
+ * index: every line reports where its own centre ended up, so the column is simply offset by
+ * `lineCentre - viewport / 2`. A frame loop then eases the real position towards that target, so
+ * the lyrics move continuously instead of snapping once per line — which also hides the fact that
+ * mpv only reports its playback position about once a second.
+ *
+ * The gestures deliberately live on the fixed viewport rather than on the moving column: the
+ * column keeps being translated, and a touch target that travels with it is a pain to hit.
+ *
+ * [scale] multiplies every font size (A− / A+ on the lyrics page).
  */
 @Composable
 private fun LyricsView(
@@ -737,93 +825,80 @@ private fun LyricsView(
 
     BoxWithConstraints(modifier) {
         val density = LocalDensity.current
-        val viewportHeightPx = with(density) { maxHeight.toPx().toInt() }
-        val halfViewportPx = viewportHeightPx / 2
-        val listState = rememberLazyListState()
-        val activeIndex = rememberUpdatedState(currentIndex)
+        val viewportPx = with(density) { maxHeight.toPx() }
+        val scroll = remember(lines) { LyricScroll() }
+        // Before the first line starts (index -1) the intro scrolls to line 0, so the song always
+        // opens with its first line in the middle instead of an empty area.
+        val activeIndex = rememberUpdatedState(if (currentIndex >= 0) currentIndex else 0)
 
-        // Centre the active line — its MIDDLE on the viewport's centre line.
-        // We use the box's maxHeight directly as the viewport height for accurate centering.
-        suspend fun centreTo(index: Int) {
-            if (index < 0) return
-            
-            // First scroll to the item
-            listState.scrollToItem(index)
-            
-            // Wait for layout to update
-            kotlinx.coroutines.delay(16)
-            
-            val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-                ?: return
-            
-            // Calculate where the visual center of the viewport is
-            val viewportCenter = halfViewportPx
-            
-            // Calculate where the center of the item is relative to the list
-            val itemCenter = item.offset + item.size / 2
-            
-            // Calculate the delta needed to center the item
-            val delta = (viewportCenter - itemCenter).toFloat()
-
-            if (abs(delta) > 2f) {
-                listState.scrollBy(delta)
-            }
-        }
-
-        // React to index changes
-        LaunchedEffect(currentIndex) {
-            if (currentIndex < 0) return@LaunchedEffect
-            centreTo(currentIndex)
-        }
-
-        // Also re-center when layout changes
-        LaunchedEffect(Unit) {
-            snapshotFlow { listState.layoutInfo.viewportSize.height }.collect {
-                val index = activeIndex.value
-                if (index >= 0) centreTo(index)
-            }
-        }
-
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            contentPadding = PaddingValues(vertical = with(density) { halfViewportPx.toDp() }),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            itemsIndexed(lines) { i, line ->
-                val active = i == currentIndex
-                val mainStyle = if (active) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium
-                val transStyle = MaterialTheme.typography.bodySmall
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { onSeek(line.timeMs) }
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        line.text,
-                        color = if (active) accent.accent else TextSecondary,
-                        style = mainStyle.copy(
-                            fontSize = mainStyle.fontSize * scale,
-                            lineHeight = mainStyle.lineHeight * scale,
-                        ),
-                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (!line.translation.isNullOrBlank()) {
-                        Text(
-                            line.translation,
-                            color = if (active) TextPrimary.copy(alpha = 0.85f) else TextSecondary.copy(alpha = 0.55f),
-                            style = transStyle.copy(
-                                fontSize = transStyle.fontSize * scale,
-                                lineHeight = transStyle.lineHeight * scale,
-                            ),
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clipToBounds()
+                .pointerInput(lines, scroll) {
+                    detectVerticalDragGestures(
+                        onDragStart = {
+                            scroll.dragging = true
+                            scroll.holdUntilNanos = 0L
+                        },
+                        onDragEnd = { scroll.releaseForAWhile() },
+                        onDragCancel = { scroll.releaseForAWhile() },
+                    ) { change, dragAmount ->
+                        change.consume()
+                        scroll.offsetPx.floatValue = scroll.clampToSong(
+                            offset = scroll.offsetPx.floatValue - dragAmount,
+                            viewportPx = viewportPx,
+                            lastIndex = lines.lastIndex,
                         )
+                    }
+                }
+                .pointerInput(lines, scroll) {
+                    detectTapGestures { at ->
+                        val line = scroll.lineAt(at.y + scroll.offsetPx.floatValue)
+                        if (line != null) onSeek(lines[line].timeMs)
+                    }
+                },
+        ) {
+            LyricStack(
+                lines = lines,
+                currentIndex = currentIndex,
+                accent = accent,
+                scale = scale,
+                scroll = scroll,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { translationY = -scroll.offsetPx.floatValue },
+            )
+        }
+
+        LaunchedEffect(lines, viewportPx) {
+            scroll.primed = false
+            scroll.lastFrameNanos = 0L
+            while (true) {
+                withFrameNanos { now ->
+                    val previous = scroll.lastFrameNanos
+                    scroll.lastFrameNanos = now
+                    val dt = if (previous == 0L) 1f / 60f
+                    else ((now - previous) / 1_000_000_000.0).toFloat()
+
+                    val target = scroll.offsetFor(activeIndex.value, viewportPx)
+                        ?: return@withFrameNanos
+                    val current = scroll.offsetPx.floatValue
+                    when {
+                        // The finger owns the position, and keeps it briefly after lifting.
+                        scroll.dragging || now < scroll.holdUntilNanos -> Unit
+
+                        // First paint, a seek, or a re-layout that moved everything: land in one
+                        // step rather than flying across the whole song.
+                        !scroll.primed || abs(target - current) > viewportPx * LYRIC_SNAP_VIEWPORTS -> {
+                            scroll.offsetPx.floatValue = target
+                            scroll.primed = true
+                        }
+
+                        else -> {
+                            val follow = 1f - exp(-dt / LYRIC_FOLLOW_TAU_S)
+                            scroll.offsetPx.floatValue = current + (target - current) * follow
+                        }
                     }
                 }
             }
@@ -831,13 +906,107 @@ private fun LyricsView(
     }
 }
 
-/** Index of the last line whose timestamp is <= [posMs], or -1 before the first line. */
-private fun activeLineIndex(lines: List<LyricLine>, posMs: Long): Int {
-    var idx = -1
-    for (i in lines.indices) {
-        if (lines[i].timeMs <= posMs) idx = i else break
+/**
+ * The lyric lines, stacked in a single column.
+ *
+ * The stack is measured with an unbounded height so every line keeps its true position — that is
+ * what makes exact centring possible: the measure pass hands each line's centre back to [scroll]
+ * before anything is drawn. The node itself stays viewport-sized and the caller clips it, so the
+ * lines outside simply wait there until the column slides them in.
+ */
+@Composable
+private fun LyricStack(
+    lines: List<LyricLine>,
+    currentIndex: Int,
+    accent: AccentPalette,
+    scale: Float,
+    scroll: LyricScroll,
+    modifier: Modifier = Modifier,
+) {
+    Layout(
+        content = {
+            lines.forEachIndexed { i, line ->
+                LyricRow(
+                    line = line,
+                    active = i == currentIndex,
+                    accent = accent,
+                    scale = scale,
+                )
+            }
+        },
+        modifier = modifier,
+    ) { measurables, constraints ->
+        val gap = LYRIC_LINE_GAP.roundToPx()
+        val placeables = measurables.map { it.measure(Constraints(maxWidth = constraints.maxWidth)) }
+
+        var y = 0
+        placeables.forEachIndexed { i, placeable ->
+            scroll.centreOf[i] = y + placeable.height / 2f
+            y += placeable.height + gap
+        }
+        val contentHeight = (y - gap).coerceAtLeast(0)
+
+        layout(constraints.maxWidth, constraints.maxHeight.coerceAtMost(contentHeight)) {
+            var top = 0
+            placeables.forEach { placeable ->
+                placeable.placeRelative(0, top)
+                top += placeable.height + gap
+            }
+        }
     }
-    return idx
+}
+
+/** One lyric line: the sung one grows into the accent-coloured title style, the rest stay dim. */
+@Composable
+private fun LyricRow(
+    line: LyricLine,
+    active: Boolean,
+    accent: AccentPalette,
+    scale: Float,
+) {
+    // The emphasis is animated rather than swapped: changing the font size in one step would
+    // shove every line below it up by a couple of pixels, right as the list is moving.
+    val emphasis by animateFloatAsState(
+        targetValue = if (active) 1f else 0f,
+        animationSpec = tween(durationMillis = 280, easing = LinearOutSlowInEasing),
+        label = "lyricEmphasis",
+    )
+    val idleStyle = MaterialTheme.typography.bodyMedium
+    val activeStyle = MaterialTheme.typography.titleMedium
+    val transStyle = MaterialTheme.typography.bodySmall
+
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            line.text,
+            color = lerpColor(TextSecondary, accent.accent, emphasis),
+            style = idleStyle.copy(
+                fontSize = lerp(idleStyle.fontSize, activeStyle.fontSize, emphasis) * scale,
+                lineHeight = lerp(idleStyle.lineHeight, activeStyle.lineHeight, emphasis) * scale,
+            ),
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (!line.translation.isNullOrBlank()) {
+            Text(
+                line.translation,
+                color = lerpColor(
+                    TextSecondary.copy(alpha = 0.55f),
+                    TextPrimary.copy(alpha = 0.85f),
+                    emphasis,
+                ),
+                style = transStyle.copy(
+                    fontSize = transStyle.fontSize * scale,
+                    lineHeight = transStyle.lineHeight * scale,
+                ),
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            )
+        }
+    }
 }
 
 private fun pathOf(uri: String): String? =
