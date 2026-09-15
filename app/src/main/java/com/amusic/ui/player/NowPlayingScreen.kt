@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -87,6 +88,7 @@ import com.amusic.MainApplication
 import com.amusic.R
 import com.amusic.data.lyrics.LyricLine
 import com.amusic.data.prefs.PlayerStyle
+import com.amusic.data.prefs.SettingsRepository
 import com.amusic.player.DesktopLyrics
 import com.amusic.player.PlayerController
 import com.amusic.player.SleepMode
@@ -108,6 +110,7 @@ import com.amusic.ui.theme.TextSecondary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private const val TAG = "NowPlaying"
 
@@ -142,6 +145,7 @@ fun NowPlayingScreen(nav: NavHostController) {
     val lyrics by app.lyricCenter.lines.collectAsState()
     val loadingLyrics by app.lyricCenter.loading.collectAsState()
     val desktopLyricsOn by app.settings.desktopLyrics.collectAsState()
+    val lyricsScale by app.settings.lyricsScale.collectAsState()
 
     // Keep the favourite heart in sync with the DB.
     LaunchedEffect(track.uri) {
@@ -215,20 +219,21 @@ fun NowPlayingScreen(nav: NavHostController) {
             }
 
             // ---- middle area ----
-            Box(
-                Modifier.fillMaxWidth().weight(1f),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (showLyrics) {
-                    LyricsView(
-                        lines = lyrics,
-                        currentIndex = currentIndex,
-                        loading = loadingLyrics,
-                        accent = accent,
-                        onSeek = onSeek,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
+            if (showLyrics) {
+                LyricsView(
+                    lines = lyrics,
+                    currentIndex = currentIndex,
+                    loading = loadingLyrics,
+                    accent = accent,
+                    onSeek = onSeek,
+                    scale = lyricsScale,
+                    modifier = Modifier.fillMaxWidth().weight(1f),
+                )
+            } else {
+                Box(
+                    Modifier.fillMaxWidth().weight(1f),
+                    contentAlignment = Alignment.Center,
+                ) {
                     MusicArt(
                         style = style,
                         artModel = artModel,
@@ -335,9 +340,36 @@ fun NowPlayingScreen(nav: NavHostController) {
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
+            // ---- lyrics font size (lyrics mode only, kept deliberately tiny) ----
+            if (showLyrics) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = { app.settings.setLyricsScale(lyricsScale - 0.1f) },
+                        enabled = lyricsScale > SettingsRepository.LYRICS_SCALE_MIN + 0.01f,
+                    ) {
+                        Text("A−", color = TextSecondary, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                    }
+                    Text(
+                        "${(lyricsScale * 100).roundToInt()}%",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.labelSmall,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(46.dp),
+                    )
+                    TextButton(
+                        onClick = { app.settings.setLyricsScale(lyricsScale + 0.1f) },
+                        enabled = lyricsScale < SettingsRepository.LYRICS_SCALE_MAX - 0.01f,
+                    ) {
+                        Text("A+", color = TextSecondary, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
 
-            // ---- volume + action row ----
+            Spacer(Modifier.height(8.dp))
             // Lyrics mode hides these entirely — that room belongs to the lyrics. The
             // collapse is animated, so the transport/progress above glide down into their
             // compact spots (QQ-Music behaviour).
@@ -684,6 +716,7 @@ private fun PlayerAction(
 /**
  * QQ-Music-style scrolling lyric view: the active line is highlighted in the accent
  * colour and kept centred, other lines are dimmed. Tapping a line seeks to it.
+ * [scale] multiplies every font size (A− / A+ control on the lyrics page).
  */
 @Composable
 private fun LyricsView(
@@ -692,6 +725,7 @@ private fun LyricsView(
     loading: Boolean,
     accent: AccentPalette,
     onSeek: (Long) -> Unit,
+    scale: Float = 1f,
     modifier: Modifier = Modifier,
 ) {
     if (lines.isEmpty()) {
@@ -702,42 +736,49 @@ private fun LyricsView(
     }
 
     BoxWithConstraints(modifier) {
-        val halfViewport = maxHeight / 2
+        val density = LocalDensity.current
+        val viewportHeightPx = with(density) { maxHeight.toPx().toInt() }
+        val halfViewportPx = viewportHeightPx / 2
         val listState = rememberLazyListState()
         val activeIndex = rememberUpdatedState(currentIndex)
 
-        // Centre the active line — its MIDDLE on the viewport's centre line. Two traps
-        // make naive `scrollToItem(index, offset)` math wrong here:
-        //  * item offsets are measured from the start of the CONTENT area, so with the
-        //    symmetric half-viewport contentPadding the visual centre sits at
-        //    (viewportStart + viewportEnd) / 2, NOT at `viewport height / 2` — targeting
-        //    the latter sends the line to the bottom edge (the old "line sits low / gets
-        //    cut off" bug), and the bogus correction then scrolls back to the clamp.
-        //  * entering lyrics mode animates this Box's height, so a one-shot correction
-        //    computed mid-transition goes stale by the time the resize settles.
-        // So: scroll near the line, then correct by measured deltas; a snapshotFlow
-        // re-true-ups while the viewport itself is resizing.
+        // Centre the active line — its MIDDLE on the viewport's centre line.
+        // We use the box's maxHeight directly as the viewport height for accurate centering.
         suspend fun centreTo(index: Int) {
-            var item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-            if (item == null) {
-                listState.scrollToItem(index)
-                item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-                    ?: return
+            if (index < 0) return
+            
+            // First scroll to the item
+            listState.scrollToItem(index)
+            
+            // Wait for layout to update
+            kotlinx.coroutines.delay(16)
+            
+            val item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+                ?: return
+            
+            // Calculate where the visual center of the viewport is
+            val viewportCenter = halfViewportPx
+            
+            // Calculate where the center of the item is relative to the list
+            val itemCenter = item.offset + item.size / 2
+            
+            // Calculate the delta needed to center the item
+            val delta = (viewportCenter - itemCenter).toFloat()
+
+            if (abs(delta) > 2f) {
+                listState.scrollBy(delta)
             }
-            val info = listState.layoutInfo
-            val mid = (info.viewportStartOffset + info.viewportEndOffset) / 2
-            val delta = (item.offset + item.size / 2) - mid
-            if (abs(delta) > 1) listState.scrollBy(delta.toFloat())
         }
 
+        // React to index changes
         LaunchedEffect(currentIndex) {
             if (currentIndex < 0) return@LaunchedEffect
-            listState.animateScrollToItem(currentIndex)
             centreTo(currentIndex)
         }
 
+        // Also re-center when layout changes
         LaunchedEffect(Unit) {
-            snapshotFlow { listState.layoutInfo.viewportEndOffset }.collect {
+            snapshotFlow { listState.layoutInfo.viewportSize.height }.collect {
                 val index = activeIndex.value
                 if (index >= 0) centreTo(index)
             }
@@ -747,11 +788,13 @@ private fun LyricsView(
             state = listState,
             modifier = Modifier.fillMaxSize(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            contentPadding = PaddingValues(vertical = halfViewport),
+            contentPadding = PaddingValues(vertical = with(density) { halfViewportPx.toDp() }),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             itemsIndexed(lines) { i, line ->
                 val active = i == currentIndex
+                val mainStyle = if (active) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium
+                val transStyle = MaterialTheme.typography.bodySmall
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -762,7 +805,10 @@ private fun LyricsView(
                     Text(
                         line.text,
                         color = if (active) accent.accent else TextSecondary,
-                        style = if (active) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyMedium,
+                        style = mainStyle.copy(
+                            fontSize = mainStyle.fontSize * scale,
+                            lineHeight = mainStyle.lineHeight * scale,
+                        ),
                         fontWeight = if (active) FontWeight.Bold else FontWeight.Normal,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth(),
@@ -771,7 +817,10 @@ private fun LyricsView(
                         Text(
                             line.translation,
                             color = if (active) TextPrimary.copy(alpha = 0.85f) else TextSecondary.copy(alpha = 0.55f),
-                            style = MaterialTheme.typography.bodySmall,
+                            style = transStyle.copy(
+                                fontSize = transStyle.fontSize * scale,
+                                lineHeight = transStyle.lineHeight * scale,
+                            ),
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
                         )

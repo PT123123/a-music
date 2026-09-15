@@ -23,6 +23,10 @@ app/src/main/libs/
 # Local session / build artifacts
 .build.log
 .workbuddy/
+.commandcode/
+
+# Stale backup of gradlew.bat from an earlier debugging session
+gradlew.bat.bak
 
 # OS
 .DS_Store

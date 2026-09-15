@@ -31,6 +31,9 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE id = :id")
     suspend fun getById(id: Long): Song?
 
+    @Query("SELECT * FROM songs WHERE data = :path LIMIT 1")
+    suspend fun findByPath(path: String): Song?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertAll(songs: List<Song>)
 

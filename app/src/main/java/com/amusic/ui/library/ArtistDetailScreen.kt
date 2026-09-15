@@ -33,7 +33,7 @@ fun ArtistDetailScreen(nav: NavHostController, artist: String) {
     Column(Modifier.fillMaxSize().background(Background)) {
         TopBar(artist, onBack = { nav.popBackStack() })
         if (songs.isEmpty()) EmptyHint("该歌手暂无歌曲")
-        else SongListContent(songs, onPlay = { playAll(songs, it) }, onAdd = { pendingSong = it })
+        else SongListContent(songs, onPlay = { playAll(songs, it) }, onAdd = { pendingSong = it }, selectionEnabled = true)
     }
 
     AddToPlaylistDialog(

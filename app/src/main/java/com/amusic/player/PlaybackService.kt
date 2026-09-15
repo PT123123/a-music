@@ -13,15 +13,19 @@ import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import android.util.Log
-import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationCompat as CoreNotificationCompat
+import androidx.media.app.NotificationCompat as MediaNotificationCompat
 import com.amusic.MainApplication
 import com.amusic.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * Foreground playback service (foregroundServiceType = mediaPlayback).
@@ -49,6 +53,7 @@ class PlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         PlayerController.init(this) // safe no-op if already initialized
+        LiveActivityManager.init(this) // Initialize Live Activity manager
         app = application as MainApplication
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         createChannel()
@@ -63,8 +68,26 @@ class PlaybackService : Service() {
                 lastState = state
                 syncToMediaSession(state)
                 updateNotification(state)
+                // Update Live Activity
+                if (state.isPlaying && state.current != null) {
+                    LiveActivityManager.update(this, state)
+                } else {
+                    LiveActivityManager.stop(this)
+                }
             }
             .launchIn(scope)
+
+        // ---- 进度条: repaint the notification every second while playing so the
+        // progress bar visibly moves. The flow above only fires on state deltas
+        // (track change / play / pause), not on tick-by-tick position changes.
+        scope.launch {
+            while (isActive) {
+                delay(1000)
+                if (lastState.isPlaying && lastState.current != null && lastState.durationMs > 0) {
+                    runCatching { notificationManager.notify(NOTIF_ID, buildNotification(lastState)) }
+                }
+            }
+        }
 
         // ---- 状态栏 / 锁屏歌词: repaint the notification whenever the sung line changes
         app.lyricCenter.current
@@ -121,6 +144,10 @@ class PlaybackService : Service() {
             ACTION_TOGGLE -> PlayerController.togglePlay()
             ACTION_NEXT -> PlayerController.next()
             ACTION_PREV -> PlayerController.prev()
+            ACTION_TOGGLE_LYRICS -> {
+                val current = app.settings.lyricsInNotification.value
+                app.settings.setLyricsInNotification(!current)
+            }
         }
         return START_STICKY
     }
@@ -185,8 +212,11 @@ class PlaybackService : Service() {
         val lyric = if (app.settings.lyricsInNotification.value) {
             app.lyricCenter.current.value?.text?.takeIf { it.isNotBlank() }
         } else null
+        
+        // Check if lyrics are enabled in notification
+        val lyricsEnabled = app.settings.lyricsInNotification.value
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return CoreNotificationCompat.Builder(this, CHANNEL_ID)
             .setContentIntent(contentIntent)
             .setContentTitle(track.title)
             .setContentText(lyric ?: track.artist)
@@ -199,12 +229,47 @@ class PlaybackService : Service() {
                 actionIntent(ACTION_TOGGLE)
             )
             .addAction(R.drawable.ic_skip_next, "下一首", actionIntent(ACTION_NEXT))
+            // Add lyrics toggle button
+            .addAction(
+                if (lyricsEnabled) R.drawable.ic_lyrics_on else R.drawable.ic_lyrics_off,
+                if (lyricsEnabled) "关闭歌词" else "显示歌词",
+                actionIntent(ACTION_TOGGLE_LYRICS)
+            )
             .setOngoing(state.isPlaying)
             .setOnlyAlertOnce(true)
-            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(CoreNotificationCompat.CATEGORY_TRANSPORT)
+            .setVisibility(CoreNotificationCompat.VISIBILITY_PUBLIC)
+            .setPriority(CoreNotificationCompat.PRIORITY_LOW)
+            // Progress bar — only renders when the notification is expanded, but
+            // setProgress() is required so that MediaStyle exposes the seek target too.
+            // The ticker under the channel badge shows "MM:SS / MM:SS" as a fallback
+            // for collapsed view.
+            .apply {
+                if (state.durationMs > 0) {
+                    val progress = ((state.positionMs.toFloat() / state.durationMs) * 100).toInt()
+                    setProgress(100, progress, false)
+                    val cur = formatMs(state.positionMs)
+                    val total = formatMs(state.durationMs)
+                    setSubText("$cur / $total")
+                }
+            }
+            // MediaStyle gives us the "this app is playing media" affordance on
+            // Android 13+ (rich progress + transport controls) and binds the
+            // notification to the MediaSession so lock-screen widgets stay in sync.
+            .setStyle(
+                MediaNotificationCompat.MediaStyle()
+                    .setMediaSession(mediaSession.sessionToken)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
             .build()
+    }
+
+    /** mm:ss formatter used for the progress label. */
+    private fun formatMs(ms: Long): String {
+        val totalSec = ms / 1000
+        val m = totalSec / 60
+        val s = totalSec % 60
+        return "%d:%02d".format(m, s)
     }
 
     private fun actionIntent(action: String): PendingIntent =
@@ -246,5 +311,6 @@ class PlaybackService : Service() {
         const val ACTION_TOGGLE = "com.amusic.player.TOGGLE"
         const val ACTION_NEXT = "com.amusic.player.NEXT"
         const val ACTION_PREV = "com.amusic.player.PREV"
+        const val ACTION_TOGGLE_LYRICS = "com.amusic.player.TOGGLE_LYRICS"
     }
 }

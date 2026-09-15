@@ -172,6 +172,11 @@ class MusicRepository(
         if (blocked.add(key(song))) prefs.edit().putStringSet(KEY_BLOCKED, blocked.toSet()).apply()
     }
 
+    // ---- song lookup ----
+
+    /** Find a song by its file path. Returns null if not found. */
+    suspend fun findSongByPath(path: String): Song? = db.songDao().findByPath(path)
+
     // ---- playlists ----
 
     suspend fun createPlaylist(name: String): Long =

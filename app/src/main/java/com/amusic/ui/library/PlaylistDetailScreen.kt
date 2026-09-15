@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -19,9 +20,16 @@ import com.amusic.ui.components.EmptyHint
 import com.amusic.ui.components.TopBar
 import com.amusic.ui.nav.Routes
 import com.amusic.ui.theme.Background
-import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.launch
 
+/**
+ * Single-playlist view. The mini-player at the bottom of [AppNav] already doubles as
+ * a "tap to open now-playing" entry, so we deliberately do NOT add a FAB here — doing
+ * so stacks a second control on top of the mini-player and looks like a bug.
+ *
+ * The screen itself is reached from the music hall's 歌单 tab; the only navigation
+ * affordance the user needs is the back arrow in [TopBar].
+ */
 @Composable
 fun PlaylistDetailScreen(nav: NavHostController, id: Long) {
     val repo = (LocalContext.current.applicationContext as MainApplication).repository
@@ -39,6 +47,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: Long) {
             onPlay = { playAll(songs, it) },
             onAdd = { pendingSong = it },
             onArtistClick = { nav.navigate(Routes.artist(it)) },
+            selectionEnabled = true,
         )
     }
 

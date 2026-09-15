@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -16,10 +17,12 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -74,17 +78,21 @@ fun MiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
 
     val glow = remember(track.title) { songGlow(accent, track.title).first }
 
-    Row(
+    Column(
         modifier = modifier
             .background(
                 Brush.horizontalGradient(
                     listOf(glow.copy(alpha = 0.55f), SurfaceVariant, Background),
                 )
-            )
-            .clickable { nav.navigate(Routes.NOW_PLAYING) }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            ),
     ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable { nav.navigate(Routes.NOW_PLAYING) }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
         if (track.albumArtUri.isNullOrBlank()) {
             androidx.compose.foundation.layout.Box(
                 Modifier
@@ -145,5 +153,22 @@ fun MiniPlayer(nav: NavHostController, modifier: Modifier = Modifier) {
         IconButton(onClick = { PlayerController.next() }) {
             Icon(Icons.Filled.SkipNext, contentDescription = "下一首", tint = TextPrimary)
         }
+        IconButton(onClick = { nav.navigate(Routes.PLAY_QUEUE) }) {
+            Icon(Icons.Filled.QueueMusic, contentDescription = "播放列表", tint = TextSecondary)
+        }
+    }
+    }
+
+    // Thin progress strip — gives the user a constant sense of "how far through
+    // the song am I" without crowding the row. Track is transparent so the
+    // gradient underneath shows through where there's no progress yet.
+    if (state.durationMs > 0) {
+        val fraction = (state.positionMs.toFloat() / state.durationMs.toFloat()).coerceIn(0f, 1f)
+        LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier.fillMaxWidth().height(2.dp),
+            color = accent.accent,
+            trackColor = Color.Transparent,
+        )
     }
 }
