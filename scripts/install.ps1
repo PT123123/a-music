@@ -1,8 +1,9 @@
 # install.ps1 <target>
 #   target: "" (any online device) | "phone" | "tablet"
 #
-# Builds are handled by the `just install` recipe (which depends on `build`);
-# this script only resolves the target device and runs `adb install`.
+# Builds are NOT handled here or by the `just install` recipe — build with
+# `just build` first; this script only resolves the target device and runs
+# `adb install` on the APK already in app/build/outputs.
 param(
     [string]$Target = ""
 )

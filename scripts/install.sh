@@ -2,8 +2,8 @@
 # install.sh <target>
 #   target: "" (any online device) | "phone" | "tablet"
 #
-# Builds are handled by the `just install` recipe (which depends on `build`);
-# this script only resolves the target device and runs `adb install`.
+# Builds are NOT handled here or by the `just install` recipe — run `just build`
+# first; this script only resolves the target device and runs `adb install`.
 set -euo pipefail
 
 target="${1:-}"
