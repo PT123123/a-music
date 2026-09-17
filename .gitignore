@@ -2,6 +2,16 @@
 # (holds net24.baseUrl, the online lossless source's site URL)
 local.properties
 
+# Release signing keystore + its password file — NEVER commit.
+# Losing the keystore means already-installed devices can no longer update in place.
+*.p12
+*.jks
+*.keystore
+keystore.properties
+
+# Release output (built APK + self-check artifacts)
+dist/
+
 # Gradle
 .gradle/
 build/

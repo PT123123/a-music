@@ -13,6 +13,15 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }
         ?.inputStream()?.use { load(it) }
 }
+// Release signing. `keystore.properties` (gitignored) holds the release keystore
+// location + password. When it is absent (e.g. a clean clone) the release build
+// simply stays unsigned rather than failing — so debug builds / unit tests still work.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+val hasReleaseSigning = keystorePropsFile.exists()
+
 val net24BaseUrl = localProps.getProperty("net24.baseUrl").orEmpty()
 if (net24BaseUrl.isBlank()) {
     logger.warn(
@@ -56,6 +65,17 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigning) {
+                storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -63,6 +83,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Sign with the release key when keystore.properties is present.
+            // Deliberately do NOT fall back to the debug key: a debug-signed
+            // "release" APK installs fine but breaks in-place updates on every
+            // machine swap, which is the worst kind of silent failure.
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 
