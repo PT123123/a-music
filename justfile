@@ -34,7 +34,7 @@ install target="":
 #   just release            Build signed release APK -> dist/amusic.apk (+ archive) + self-check
 #   just release-verify     Only self-check the APK already in dist/
 #   just release-bump       versionCode+1, versionName last segment+1
-#   just release-publish    Tag + GitHub Release (fixed asset name) + verify download link
+#   just release-publish    Tag + GitHub Release (fixed asset name) + verify the asset GitHub holds
 #
 # Obtainium tracks the permanent direct link:
 #   https://github.com/PT123123/a-music/releases/latest/download/amusic.apk
@@ -52,6 +52,6 @@ release-verify:
 release-bump:
     pwsh ./scripts/release.ps1 bump
 
-# Tag, push a GitHub Release with a fixed asset name, and verify the download link.
+# Tag, push a GitHub Release with a fixed asset name, and verify the asset GitHub holds.
 release-publish:
     pwsh ./scripts/release.ps1 publish

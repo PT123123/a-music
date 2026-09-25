@@ -3,7 +3,7 @@
 #   pwsh ./scripts/release.ps1            build  -> dist/amusic.apk (+ archive + build.txt) + self-check
 #   pwsh ./scripts/release.ps1 verify             only self-check the APK already in dist/
 #   pwsh ./scripts/release.ps1 bump               versionCode+1, versionName last segment+1
-#   pwsh ./scripts/release.ps1 publish            tag + GitHub Release + real download sha256 check
+#   pwsh ./scripts/release.ps1 publish            tag + GitHub Release + server-side digest/size check
 #
 # The permanent direct link Obtainium tracks:
 #   https://github.com/<owner>/<repo>/releases/latest/download/amusic.apk
@@ -159,6 +159,7 @@ function Publish {
     $slug = Get-RepoSlug
     $v = Get-Version
     $tag = "v$($v.Name)"
+    $url = "https://github.com/$slug/releases/latest/download/amusic.apk"
 
     # Gate 1: clean working tree
     $status = (git -C $RepoRoot status --porcelain)
@@ -200,20 +201,52 @@ function Publish {
     if ($rc -ne 0) { throw "gh release create failed:`n$GhOutput" }
     Write-Host $GhOutput
 
-    # Gate 4: actually download the permanent link and compare sha256
-    $url = "https://github.com/$slug/releases/latest/download/amusic.apk"
-    $tmp = Join-Path $env:TEMP "amusic-dl-check.apk"
-    Write-Host ">> Downloading permanent link to verify: $url"
-    curl.exe -sSL -o $tmp -w "http=%{http_code} bytes=%{size_download}`n" $url
-    if (-not (Test-Path $tmp)) { throw 'download failed — permanent link not reachable.' }
+    # Gate 4: confirm what GitHub actually serves, without downloading the APK.
+    # Release assets are HTTPS-only (SSH has no transport for them), so the old
+    # "curl the permanent link" leg died on this machine's direct-connection resets
+    # *after* the release was already public — leaving a published-but-unverified state.
+    # The API instead reports a server-computed digest per asset; compare that plus the
+    # size against the local APK, and require this release to be "latest", since that is
+    # exactly what /releases/latest/download/amusic.apk resolves through.
+    $localHash = (Get-FileHash -Algorithm SHA256 $FixedApk).Hash.ToLower()
+    $localSize = (Get-Item $FixedApk).Length
 
-    $localHash = (Get-FileHash -Algorithm SHA256 $FixedApk).Hash
-    $dlHash = (Get-FileHash -Algorithm SHA256 $tmp).Hash
-    Remove-Item $tmp -Force
-    if ($localHash -ne $dlHash) { throw "sha256 mismatch! local=$localHash dl=$dlHash" }
+    # What the permanent link actually resolves to. `gh release view latest` does not
+    # exist as a name, so ask the REST endpoint behind that URL (it means "latest
+    # published, non-draft, non-prerelease" -- i.e. exactly the link's semantics).
+    $rc = Invoke-Gh @('api', "repos/$slug/releases/latest", '--jq', '.tag_name')
+    if ($rc -ne 0) { throw "gh api releases/latest failed:`n$GhOutput" }
+    $latestTag = $GhOutput.Trim()
+    if ($latestTag -ne $tag) { throw "/latest/ points at $latestTag, not $tag — the permanent link would serve a different build." }
+    Write-Host ">> Permanent link resolves to $latestTag."
+
+    $rc = Invoke-Gh @('release', 'view', $tag, '-R', $slug, '--json', 'assets')
+    if ($rc -ne 0) { throw "gh release view failed:`n$GhOutput" }
+    $served = $GhOutput | ConvertFrom-Json
+    $asset = @($served.assets) | Where-Object { $_.name -eq 'amusic.apk' } | Select-Object -First 1
+    if (-not $asset) { throw "amusic.apk not among the uploaded assets: $(@($served.assets).name -join ', ')" }
+    Write-Host ">> Asset on GitHub: $($asset.name) size=$($asset.size) digest=$($asset.digest)"
+
+    if ($asset.digest) {
+        if ($asset.digest.ToLower() -ne "sha256:$localHash") { throw "GitHub digest != local APK! github=$($asset.digest) local=sha256:$localHash" }
+        if ([long]$asset.size -ne [long]$localSize) { throw "GitHub asset size $($asset.size) != local $localSize" }
+        Write-Host ">> GitHub-side digest and size match the local APK." -ForegroundColor Green
+    } else {
+        Write-Warning 'gh reported no digest — falling back to downloading the asset.'
+        $tmp = Join-Path $env:TEMP 'amusic-dl-check.apk'
+        curl.exe -sSL -o $tmp -w "http=%{http_code} bytes=%{size_download}`n" $url
+        if (-not (Test-Path $tmp)) { throw 'download failed — permanent link not reachable.' }
+        $dlHash = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
+        Remove-Item $tmp -Force
+        if ($dlHash -ne $localHash) { throw "sha256 mismatch! local=$localHash dl=$dlHash" }
+    }
 
     Write-Host ">> Published & verified. Obtainium link:`n   $url" -ForegroundColor Green
     Write-Host "   sha256: $localHash" -ForegroundColor Green
+    if (-not ($env:HTTPS_PROXY -or $env:ALL_PROXY)) {
+        Write-Host '   (permanent link not fetched. Live check needs a proxy on this network:' ` -ForegroundColor DarkGray
+        Write-Host '    HTTPS_PROXY=http://<proxy>:<port> curl -sSI <url> -o /dev/null -w "%{http_code}")' -ForegroundColor DarkGray
+    }
 }
 
 switch ($Command) {
