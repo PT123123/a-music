@@ -5,6 +5,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -21,11 +23,17 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -43,6 +51,7 @@ import com.amusic.ui.theme.LocalAccent
 import com.amusic.ui.theme.Palettes
 import com.amusic.ui.theme.TextPrimary
 import com.amusic.ui.theme.TextSecondary
+import kotlinx.coroutines.launch
 
 /** Settings: player layout, lyrics surfaces, equalizer, accent colour and library stats. */
 @Composable
@@ -159,6 +168,46 @@ fun SettingsScreen(nav: NavHostController) {
                 DetailRow("歌曲总数", "${songCount.size} 首")
                 DetailRow("已收藏", "${favCount.size} 首", highlight = true)
                 DetailRow("回收站", if (trashCount.isEmpty()) "空" else "${trashCount.size} 首")
+
+                Spacer(Modifier.padding(top = 8.dp))
+                HairLine()
+
+                SectionTitle("相似推荐")
+                val recAccent = LocalAccent.current
+                val recStatus by app.recommendation.status.collectAsState()
+                val recScope = rememberCoroutineScope()
+                var recError by remember { mutableStateOf<String?>(null) }
+                val recPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+                    if (uri != null) {
+                        recScope.launch { recError = app.recommendation.import(uri) }
+                    }
+                }
+                DetailRow("引擎", if (recStatus.nativeAvailable) "libmusicspace（设备端 Rust）" else "不可用（构建缺 Rust 工具链）")
+                DetailRow(
+                    "特征数据",
+                    if (recStatus.payloadLoaded) "已导入 ${recStatus.payloadTracks} 首" else "未导入",
+                )
+                DetailRow(
+                    "已匹配",
+                    "${recStatus.matchedSongs} / ${recStatus.librarySongs} 首" + if (recStatus.indexing) "（计算中…）" else "",
+                    highlight = recStatus.indexing,
+                )
+                TextButton(onClick = { recPicker.launch(null) }) {
+                    Text(if (recStatus.payloadLoaded) "重新导入特征数据" else "导入特征数据", color = recAccent.accent)
+                }
+                if (recError != null) {
+                    Text(
+                        recError!!,
+                        color = Color(0xFFE57373),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Text(
+                    "特征由桌面端 music-recommend 抽取（bench_portability.py --export，得到 manifest.kv + tracks.tsv），" +
+                        "目录拷到手机后在这里选它导入。手机只做毫秒级查询，不分析音频；长按歌曲 → 相似歌曲。",
+                    color = TextSecondary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
 
                 Spacer(Modifier.padding(top = 8.dp))
                 HairLine()

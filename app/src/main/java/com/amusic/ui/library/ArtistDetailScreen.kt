@@ -17,6 +17,7 @@ import com.amusic.data.model.Song
 import com.amusic.ui.components.AddToPlaylistDialog
 import com.amusic.ui.components.EmptyHint
 import com.amusic.ui.components.SongRow
+import com.amusic.ui.nav.Routes
 import com.amusic.ui.components.TopBar
 import com.amusic.ui.theme.Background
 import androidx.compose.runtime.collectAsState
@@ -33,7 +34,7 @@ fun ArtistDetailScreen(nav: NavHostController, artist: String) {
     Column(Modifier.fillMaxSize().background(Background)) {
         TopBar(artist, onBack = { nav.popBackStack() })
         if (songs.isEmpty()) EmptyHint("该歌手暂无歌曲")
-        else SongListContent(songs, onPlay = { playAll(songs, it) }, onAdd = { pendingSong = it }, selectionEnabled = true)
+        else SongListContent(songs, onPlay = { playAll(songs, it) }, onAdd = { pendingSong = it }, onSimilar = { nav.navigate(Routes.similar(it.id)) }, selectionEnabled = true)
     }
 
     AddToPlaylistDialog(

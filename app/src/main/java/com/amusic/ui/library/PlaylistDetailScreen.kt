@@ -47,6 +47,7 @@ fun PlaylistDetailScreen(nav: NavHostController, id: Long) {
             onPlay = { playAll(songs, it) },
             onAdd = { pendingSong = it },
             onArtistClick = { nav.navigate(Routes.artist(it)) },
+            onSimilar = { nav.navigate(Routes.similar(it.id)) },
             selectionEnabled = true,
         )
     }

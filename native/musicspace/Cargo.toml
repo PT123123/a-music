@@ -1,0 +1,19 @@
+[package]
+name = "musicspace"
+version = "0.1.0"
+edition = "2021"
+description = "Std-only port of the music-recommend query path; rlib hosts the scoring core, the cdylib target is the Android JNI surface"
+
+[lib]
+name = "musicspace"
+crate-type = ["rlib", "cdylib"]
+
+[[bin]]
+name = "musicspace"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = true

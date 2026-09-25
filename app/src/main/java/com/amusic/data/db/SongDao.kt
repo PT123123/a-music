@@ -31,6 +31,9 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE id = :id")
     suspend fun getById(id: Long): Song?
 
+    @Query("SELECT * FROM songs WHERE id IN (:ids)")
+    suspend fun getByIds(ids: List<Long>): List<Song>
+
     @Query("SELECT * FROM songs WHERE data = :path LIMIT 1")
     suspend fun findByPath(path: String): Song?
 
@@ -39,6 +42,10 @@ interface SongDao {
 
     @Query("SELECT COUNT(*) FROM songs WHERE trashedAt IS NULL")
     suspend fun count(): Int
+
+    /** One-shot snapshot of the visible library (recommendation indexing uses this). */
+    @Query("SELECT * FROM songs WHERE trashedAt IS NULL")
+    suspend fun allOnce(): List<Song>
 
     // ---- recycle bin ----
 

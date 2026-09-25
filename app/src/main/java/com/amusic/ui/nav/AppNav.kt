@@ -50,6 +50,7 @@ import com.amusic.ui.online.DiscoverScreen
 import com.amusic.ui.player.MiniPlayer
 import com.amusic.ui.player.NowPlayingScreen
 import com.amusic.ui.player.PlayQueueScreen
+import com.amusic.ui.recommend.SimilarSongsScreen
 import com.amusic.ui.trash.TrashScreen
 import com.amusic.ui.theme.LocalAccent
 import com.amusic.ui.theme.Surface
@@ -90,6 +91,10 @@ fun AppNav() {
                     composable(Routes.SETTINGS) { SettingsScreen(nav) }
                     composable(Routes.TRASH) { TrashScreen(nav) }
                     composable(Routes.PLAY_QUEUE) { PlayQueueScreen(nav) }
+                    composable(Routes.SIMILAR) { back ->
+                        val id = back.arguments?.getString("songId")?.toLongOrNull() ?: return@composable
+                        SimilarSongsScreen(nav, id)
+                    }
                 }
             }
 

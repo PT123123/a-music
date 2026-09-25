@@ -26,6 +26,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayCircle
@@ -196,6 +197,7 @@ fun LibraryScreen(nav: NavHostController) {
                                 onPlay = { idx -> playAll(shownSongs, idx) },
                                 onAdd = { pendingSong = it },
                                 onArtistClick = openArtist,
+                                onSimilar = { nav.navigate(Routes.similar(it.id)) },
                                 selectionEnabled = true,
                                 scrollRequest = scrollRequest,
                                 modifier = Modifier.weight(1f),
@@ -221,7 +223,7 @@ fun LibraryScreen(nav: NavHostController) {
                             else "收藏里没有匹配「$q」的歌曲"
                         )
                     } else {
-                        FavoriteTabContent(shownFavorites, onAdd = { pendingSong = it }, onArtistClick = openArtist)
+                        FavoriteTabContent(shownFavorites, onAdd = { pendingSong = it }, onArtistClick = openArtist, onSimilar = { nav.navigate(Routes.similar(it.id)) })
                     }
                 }
             }
@@ -432,6 +434,7 @@ internal fun SongListContent(
     onPlay: (Int) -> Unit,
     onAdd: (Song) -> Unit,
     onArtistClick: ((String) -> Unit)? = null,
+    onSimilar: ((Song) -> Unit)? = null,
     selectionEnabled: Boolean = false,
     scrollRequest: ScrollRequest? = null,
     modifier: Modifier = Modifier,
@@ -541,6 +544,13 @@ internal fun SongListContent(
                                     ).show()
                                 },
                             )
+                            if (onSimilar != null) {
+                                DropdownMenuItem(
+                                    text = { Text("相似歌曲", color = TextPrimary) },
+                                    leadingIcon = { Icon(Icons.Filled.AutoAwesome, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },
+                                    onClick = { closeMenu(); onSimilar(song) },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("加入歌单", color = TextPrimary) },
                                 leadingIcon = { Icon(Icons.Filled.PlaylistAdd, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(18.dp)) },
@@ -782,6 +792,7 @@ private fun FavoriteTabContent(
     songs: List<Song>,
     onAdd: (Song) -> Unit,
     onArtistClick: ((String) -> Unit)? = null,
+    onSimilar: ((Song) -> Unit)? = null,
 ) {
     val accent = LocalAccent.current
     Column(Modifier.fillMaxSize()) {

@@ -122,6 +122,76 @@ android {
             path = file("src/main/jni/Android.mk")
         }
     }
+
+    // libmusicspace.so (相似推荐 query engine) is built by the buildMusicspace cargo
+    // task below and handed to AGP through this jniLibs dir, ABI-foldered like any
+    // prebuilt .so. When Rust is missing the dir simply stays empty.
+    sourceSets {
+        getByName("main") {
+            // Points at the PARENT of the ABI folders (srcDir must contain arm64-v8a/, etc.).
+            jniLibs.srcDir(layout.buildDirectory.dir("musicspace-jniLibs"))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// musicspace: build the recommendation query engine (Rust, native/musicspace) as a
+// cdylib for the device ABI. Feature extraction never runs on the phone; this .so
+// only scores. See native/musicspace/README.md for the data + parity discipline.
+// Without a Rust toolchain the tasks disable themselves with a warning and the app
+// degrades to "相似推荐不可用" instead of failing the build.
+// ---------------------------------------------------------------------------
+val musicspaceCargo: String? = run {
+    val exe = if (System.getProperty("os.name").startsWith("Windows")) "cargo.exe" else "cargo"
+    val dirs = buildList {
+        (System.getenv("PATH") ?: "").split(File.pathSeparator).filter { it.isNotBlank() }.forEach { add(File(it)) }
+        // rustup installs into ~/.cargo/bin even when PATH handling went wrong.
+        (System.getenv("USERPROFILE") ?: System.getProperty("user.home"))?.let { add(File(it, ".cargo/bin")) }
+    }
+    dirs.firstOrNull { File(it, exe).isFile }?.let { File(it, exe).absolutePath }
+}
+if (musicspaceCargo == null) {
+    logger.warn(
+        "cargo was not found — libmusicspace.so will not be built and 相似推荐 will be unavailable. " +
+            "Install Rust + `rustup target add aarch64-linux-android` (see native/musicspace/README.md)."
+    )
+}
+
+val musicspaceTarget = "aarch64-linux-android"
+val musicspaceCargoSo = rootProject.file("native/musicspace/target/$musicspaceTarget/release/libmusicspace.so")
+val musicspaceJniLibs = layout.buildDirectory.dir("musicspace-jniLibs/arm64-v8a")
+
+val buildMusicspace by tasks.registering(Exec::class) {
+    enabled = musicspaceCargo != null
+    workingDir(rootProject.file("native/musicspace"))
+    commandLine(musicspaceCargo, "build", "--release", "--target", musicspaceTarget)
+    // Link with the NDK's per-API clang wrapper (matches minSdk 26 and ndkVersion above).
+    val hostTag = when {
+        System.getProperty("os.name").startsWith("Windows") -> "windows-x86_64"
+        System.getProperty("os.name").startsWith("Mac") -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+    val ndkBin = file(File(File(File(localProps.getProperty("sdk.dir"), "ndk"), android.ndkVersion), "toolchains/llvm/prebuilt/$hostTag/bin"))
+    val linker = listOf("aarch64-linux-android26-clang.cmd", "aarch64-linux-android26-clang")
+        .map { File(ndkBin, it) }
+        .firstOrNull { it.exists() }
+        ?: throw GradleException("NDK linker not found under ${ndkBin.absolutePath}")
+    environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", linker.absolutePath)
+    inputs.dir(rootProject.file("native/musicspace/src"))
+    inputs.file(rootProject.file("native/musicspace/Cargo.toml"))
+    outputs.file(musicspaceCargoSo)
+}
+
+// ABI-folder the cargo output so AGP's jniLibs merge picks it up like any prebuilt .so.
+val copyMusicspace by tasks.registering(Copy::class) {
+    enabled = musicspaceCargo != null
+    from(musicspaceCargoSo)
+    into(musicspaceJniLibs)
+    dependsOn(buildMusicspace)
+}
+
+tasks.matching { it.name == "mergeDebugJniLibFolders" || it.name == "mergeReleaseJniLibFolders" }.configureEach {
+    if (musicspaceCargo != null) dependsOn(copyMusicspace)
 }
 
 dependencies {
@@ -152,6 +222,9 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+
+    // SAF directory listing for the recommendation payload import
+    implementation("androidx.documentfile:documentfile:1.0.1")
 
     // Async images (album art)
     implementation("io.coil-kt:coil-compose:2.6.0")

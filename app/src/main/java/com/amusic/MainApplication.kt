@@ -7,6 +7,7 @@ import com.amusic.data.db.MusicDatabase
 import com.amusic.data.lyrics.LyricCenter
 import com.amusic.data.lyrics.LyricsRepository
 import com.amusic.data.prefs.SettingsRepository
+import com.amusic.data.recommend.RecommendationCenter
 import com.amusic.data.repository.MusicRepository
 import com.amusic.data.scan.MediaStoreScanner
 import com.amusic.data.scan.QqMusicScanner
@@ -22,6 +23,10 @@ import kotlinx.coroutines.launch
 class MainApplication : Application(), ImageLoaderFactory {
 
     lateinit var repository: MusicRepository
+        private set
+
+    /** 相似推荐: desktop-extracted payload + on-device Rust scoring (native/musicspace). */
+    lateinit var recommendation: RecommendationCenter
         private set
 
     lateinit var lyricsRepository: LyricsRepository
@@ -59,12 +64,15 @@ class MainApplication : Application(), ImageLoaderFactory {
         PlayerController.init(this)
 
         settings = SettingsRepository(this)
+        val db = MusicDatabase.get(this)
         repository = MusicRepository(
-            MusicDatabase.get(this),
+            db,
             MediaStoreScanner(this),
             QqMusicScanner(this),
             this,
         )
+        recommendation = RecommendationCenter(this, db, db.songDao(), scope)
+        recommendation.start()
         lyricsRepository = LyricsRepository(this)
         lyricCenter = LyricCenter(lyricsRepository, scope)
 

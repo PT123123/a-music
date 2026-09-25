@@ -41,3 +41,6 @@ gradlew.bat.bak
 # OS
 .DS_Store
 Thumbs.db
+
+# Rust build output (musicspace)
+native/musicspace/target/

@@ -13,6 +13,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val TRASH = "trash"
     const val PLAY_QUEUE = "play_queue"
+    const val SIMILAR = "similar/{songId}"
 
     /**
      * Build the concrete route for one artist. Names come from ID3 tags and routinely
@@ -22,4 +23,6 @@ object Routes {
     fun artist(name: String): String = "artist/" + URLEncoder.encode(name, "UTF-8")
 
     fun playlist(id: Long): String = "playlist/$id"
+
+    fun similar(songId: Long): String = "similar/$songId"
 }
