@@ -27,6 +27,36 @@ cargo run --release -- <导出目录> --verify   # 必须输出 parity 0 mismatc
 所有权重/分组/混合系数都从导出的 `manifest.kv` 读,代码里没有硬编码——上游改了
 `configs/weights.yaml` 后重新导出即可,无需改代码。
 
+## 上游更新后:手机要不要跟着改
+
+手机只承担 **song→song 打分**这一条路径(上游 `docs/PORTING.md` 的"诚实边界"同一句:
+`category` / `feed_next` 尚未移植)。上游改动落在左列才需要动本 crate 或 Kotlin 侧;
+落在右列的,手机一行都不用改。
+
+| 影响手机 | 与手机无关(桌面独有) |
+|---|---|
+| `recommendation/core.py`(`_score_pair`、分组重排) | `recommendation/category.py` / `discovery.py` / `lexicon.py` / `text_query.py` |
+| `recommendation/space.py` 的 `FEATURE_GROUPS` / `SEQUENCE_COLS` / `GROUP_REASON` | 预设类别 `configs/categories.yaml`、聚类发现、自由中文查询 |
+| `recommendation/sequence_sim.py`、`configs/weights.yaml` | SQLite schema、`library_version`、tag 回填、API server |
+| `scripts/bench_portability.py` 的 `export()`(载荷格式与 `manifest.kv` 键) | 离线特征抽取(librosa 侧)、feed |
+| `preprocess/audio.py` 的 `track_id_for`(身份,与 `TrackIdentity.kt` 逐字节锁死) | — |
+
+判别顺序:上表左列没 diff 就到此为止;有 diff 或不确定,重新导出一次载荷并与旧载荷
+`cmp`——**`manifest.kv` + `tracks.tsv` + `expected_top20.tsv` 三件套逐字节相同 ⇒ 打分
+语义未变**(它们正好就是手机读的全部输入,连 Python 自己的排名都一致),再跑一次
+`--verify` 记档即可。
+
+## 对齐记录
+
+- vendor 自上游 `ff99fa1` 的 `rust/musicspace` 探针(该目录此后未再变动),改造为三形态后
+  随 a-music `a42b5e2` 入库。
+- **2026-09-25 复核上游 `ee81118`**(类别发散:33 维共享词表 + 曲库内聚类自动发现 +
+  小曲库诚实标注;`library_version` 升为六元组;预设 6 → 22):该次只动了上表右列,
+  左列六个文件里只有 `space.py` 和 `bench_portability.py` 被改,且改的是类别分位数与
+  体积统计口径,不涉及导出。实测重新导出的三件套与旧载荷**逐字节相同**,`--verify`
+  12 seed × 20 位次 = 240 slot:**顺序 0 处不一致、分数差 0.0e0**,反向对照抓到 183 处
+  → 手机端打分核心与 Kotlin 侧无需改动。
+
 ## 数据从哪来
 
 在装了 Python 环境的桌面端 music-recommend 仓库:
