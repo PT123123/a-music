@@ -55,3 +55,7 @@ release-bump:
 # Tag, push a GitHub Release with a fixed asset name, and verify the asset GitHub holds.
 release-publish:
     pwsh ./scripts/release.ps1 publish
+
+# Publish the release APK to the LAN.
+publish:
+    lanpub add dist/amusic.apk
