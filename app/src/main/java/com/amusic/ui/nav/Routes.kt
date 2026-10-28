@@ -14,6 +14,8 @@ object Routes {
     const val TRASH = "trash"
     const val PLAY_QUEUE = "play_queue"
     const val SIMILAR = "similar/{songId}"
+    const val LAN = "lan"
+    const val LAN_BROWSE = "lan/browse/{sourceId}"
 
     /**
      * Build the concrete route for one artist. Names come from ID3 tags and routinely
@@ -25,4 +27,6 @@ object Routes {
     fun playlist(id: Long): String = "playlist/$id"
 
     fun similar(songId: Long): String = "similar/$songId"
+
+    fun lanBrowse(sourceId: String): String = "lan/browse/" + URLEncoder.encode(sourceId, "UTF-8")
 }

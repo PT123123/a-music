@@ -4,6 +4,7 @@ import android.app.Application
 import coil.ImageLoader
 import coil.ImageLoaderFactory
 import com.amusic.data.db.MusicDatabase
+import com.amusic.data.lan.LanStore
 import com.amusic.data.lyrics.LyricCenter
 import com.amusic.data.lyrics.LyricsRepository
 import com.amusic.data.prefs.SettingsRepository
@@ -42,6 +43,10 @@ class MainApplication : Application(), ImageLoaderFactory {
     lateinit var settings: SettingsRepository
         private set
 
+    /** LAN / DLNA sources + the stream-vs-cache playback mode (see [LanStore]). */
+    lateinit var lanStore: LanStore
+        private set
+
     /** App-lifetime scope for the two long-running bridges wired in [onCreate]. */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -64,6 +69,7 @@ class MainApplication : Application(), ImageLoaderFactory {
         PlayerController.init(this)
 
         settings = SettingsRepository(this)
+        lanStore = LanStore(this)
         val db = MusicDatabase.get(this)
         repository = MusicRepository(
             db,

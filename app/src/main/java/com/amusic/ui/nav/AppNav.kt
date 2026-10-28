@@ -40,6 +40,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.amusic.MainApplication
 import com.amusic.player.PlayerController
+import com.amusic.ui.lan.LanBrowseScreen
+import com.amusic.ui.lan.LanScreen
 import com.amusic.ui.library.ArtistDetailScreen
 import com.amusic.ui.library.LibraryScreen
 import com.amusic.ui.library.PlaylistDetailScreen
@@ -94,6 +96,13 @@ fun AppNav() {
                     composable(Routes.SIMILAR) { back ->
                         val id = back.arguments?.getString("songId")?.toLongOrNull() ?: return@composable
                         SimilarSongsScreen(nav, id)
+                    }
+                    composable(Routes.LAN) { LanScreen(nav) }
+                    composable(Routes.LAN_BROWSE) { back ->
+                        val id = java.net.URLDecoder.decode(
+                            back.arguments?.getString("sourceId") ?: "", "UTF-8"
+                        )
+                        LanBrowseScreen(nav, id)
                     }
                 }
             }

@@ -22,6 +22,12 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- LAN streaming: browse HTTP shares + discover DLNA/UPnP servers.
+         ACCESS_WIFI_STATE is needed for the multicast lock that lets SSDP replies
+         through; both are normal permissions (no runtime prompt). -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
     <!-- Floating "desktop lyrics" window (user grants it from system settings) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 

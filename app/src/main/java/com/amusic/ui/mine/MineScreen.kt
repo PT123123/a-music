@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -95,6 +96,12 @@ fun MineScreen(nav: NavHostController) {
                 title = "回收站",
                 subtitle = if (trashCount.isEmpty()) "空" else "${trashCount.size} 首 · 可恢复",
                 onClick = { nav.navigate(Routes.TRASH) },
+            )
+            EntryRow(
+                icon = Icons.Filled.Wifi,
+                title = "局域网播放",
+                subtitle = "DLNA / UPnP · HTTP 直连电脑曲库",
+                onClick = { nav.navigate(Routes.LAN) },
             )
             EntryRow(
                 icon = Icons.Filled.Settings,
