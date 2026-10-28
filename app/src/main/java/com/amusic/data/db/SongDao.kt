@@ -58,6 +58,16 @@ interface SongDao {
     @Query("DELETE FROM songs WHERE id IN (:ids)")
     suspend fun purge(ids: List<Long>)
 
+    /**
+     * Drop the rows the exclusion rules rejected — they were added to the library
+     * before the rules existed (or the rules changed since).
+     *
+     * Only the visible rows go: an entry in the recycle bin was put there by the user
+     * and stays until they empty the bin. The files on disk are never touched.
+     */
+    @Query("DELETE FROM songs WHERE trashedAt IS NULL AND data IN (:paths)")
+    suspend fun deleteVisibleByPaths(paths: List<String>): Int
+
     @Query("DELETE FROM songs WHERE trashedAt IS NOT NULL")
     suspend fun purgeAll()
 

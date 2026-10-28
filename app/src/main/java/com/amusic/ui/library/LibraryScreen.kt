@@ -110,6 +110,7 @@ fun LibraryScreen(nav: NavHostController) {
     val artists by repo.artists.collectAsState(initial = emptyList())
     val playlists by repo.playlists.collectAsState(initial = emptyList())
     val favorites by repo.favoriteSongs.collectAsState(initial = emptyList())
+    val excluded by repo.excludedCount.collectAsState()
     val sort by app.settings.libSort.collectAsState()
     val scope = rememberCoroutineScope()
     val accent = LocalAccent.current
@@ -153,6 +154,17 @@ fun LibraryScreen(nav: NavHostController) {
                         "${songs.size} 首",
                         color = TextSecondary,
                         style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+
+                // The exclusion rules work in the background — say so, otherwise the
+                // library just looks smaller and nobody knows why.
+                if (excluded > 0) {
+                    Text(
+                        "已自动排除 $excluded 个录音/语音文件",
+                        color = TextSecondary,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 2.dp),
                     )
                 }
 

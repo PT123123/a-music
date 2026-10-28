@@ -26,6 +26,9 @@ import java.io.RandomAccessFile
  * The surviving files live in shared storage and are readable by path once the app
  * holds READ_MEDIA_AUDIO (API 33+) / READ_EXTERNAL_STORAGE, so libmpv can open them
  * via a plain `file://` URI.
+ *
+ * Whatever survives those two layers still goes through [ExclusionRules], so a
+ * recording that was downloaded into the same folder is kept out of the library too.
  */
 class QqMusicScanner(private val context: Context) {
 
@@ -39,7 +42,7 @@ class QqMusicScanner(private val context: Context) {
         ".mflac", ".qmc", ".mgg", ".tm0", ".kgm", ".kgma", ".vpr", ".xm",
     )
 
-    fun scan(): List<Song> {
+    fun scan(): ScanOutcome {
         val roots = listOf(
             File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
@@ -47,14 +50,26 @@ class QqMusicScanner(private val context: Context) {
             ),
             File(Environment.getExternalStorageDirectory(), "qqmusic/song"),
         )
-        val out = mutableListOf<Song>()
+        val kept = mutableListOf<Song>()
+        val rejected = mutableListOf<RejectedSong>()
         for (root in roots) {
             if (!root.exists() || !root.isDirectory) continue
             root.walkTopDown()
                 .filter { it.isFile && isPlayable(it) }
-                .forEach { out.add(toSong(it)) }
+                .forEach { file ->
+                    val song = toSong(file)
+                    // These are real music downloads, so the length rules must not
+                    // apply (the duration is unknown here anyway) — but a download
+                    // that is actually a recording still gets caught by name/folder.
+                    val reason = ExclusionRules.reject(song, isMusic = true)
+                    if (reason == null) {
+                        kept.add(song)
+                    } else {
+                        rejected.add(RejectedSong(song.data, song.title, reason))
+                    }
+                }
         }
-        return out
+        return ScanOutcome(kept, rejected)
     }
 
     private fun isPlayable(f: File): Boolean {

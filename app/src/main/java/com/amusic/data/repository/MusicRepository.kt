@@ -8,10 +8,15 @@ import com.amusic.data.model.Favorite
 import com.amusic.data.model.Playlist
 import com.amusic.data.model.PlaylistSong
 import com.amusic.data.model.Song
+import com.amusic.data.scan.ExclusionRules
 import com.amusic.data.scan.MediaStoreScanner
 import com.amusic.data.scan.QqMusicScanner
+import com.amusic.data.scan.RejectedSong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -36,6 +41,14 @@ class MusicRepository(
     val songs: Flow<List<Song>> = db.songDao().observeAll()
     val artists: Flow<List<String>> = db.songDao().observeArtists()
     val playlists: Flow<List<Playlist>> = db.playlistDao().observeAll()
+
+    /**
+     * How many files the last scan dropped by rule. The library header shows it, so the
+     * automatic exclusion is visible instead of silently shrinking the library. It is
+     * persisted, because the cleanup happens once but the user may open the app again.
+     */
+    private val _excludedCount = MutableStateFlow(prefs.getInt(KEY_LAST_EXCLUDED, 0))
+    val excludedCount: StateFlow<Int> = _excludedCount.asStateFlow()
 
     /** Recycle bin contents, newest deletion first. */
     val trash: Flow<List<Song>> = db.songDao().observeTrash()
@@ -79,21 +92,50 @@ class MusicRepository(
 
     /** Scan once if the library is empty; call on app start. */
     suspend fun scanIfNeeded() {
-        if (db.songDao().count() == 0) scan()
+        // A new rules version means the library may hold files that are now rejected —
+        // rescan so they get cleaned up without the user touching anything.
+        val rulesChanged = prefs.getInt(KEY_RULES_VERSION, -1) != ExclusionRules.VERSION
+        if (db.songDao().count() == 0 || rulesChanged) scan()
     }
 
     suspend fun scan() {
         // MediaStore covers the general library; QqMusicScanner adds QQ Music's
         // downloaded songs (which may not be exposed cleanly via MediaStore).
         // Dedupe by file path so a song present in both sources wins only once.
-        val scanned = scanner.scan() + qqMusicScanner.scan()
+        val outcome = scanner.scan() + qqMusicScanner.scan()
         val binned = db.songDao().trashedPaths().toHashSet()
-        val keep = scanned
+        val keep = outcome.kept
             .distinctBy { it.data }
             // Skip anything sitting in the recycle bin (it is still in `songs`, and an upsert
             // would clear its `trashedAt`) and anything permanently deleted.
             .filter { it.data !in binned && !isBlocked(it) }
         db.songDao().upsertAll(keep)
+        dropRejectedRows(outcome.rejected)
+        _excludedCount.value = outcome.rejected.size
+        prefs.edit()
+            .putInt(KEY_LAST_EXCLUDED, outcome.rejected.size)
+            .putInt(KEY_RULES_VERSION, ExclusionRules.VERSION)
+            .apply()
+    }
+
+    /**
+     * Remove rows for files the exclusion rules rejected.
+     *
+     * A scan only sees what is on the device *now*, so a recording that was added to
+     * the library before the rules existed is still in the table. The rejected list
+     * tells us which paths must leave the library — the files themselves stay on disk.
+     */
+    private suspend fun dropRejectedRows(rejected: List<RejectedSong>) {
+        if (rejected.isEmpty()) return
+        var removed = 0
+        // SQLite limits how many variables a single statement may bind.
+        rejected.map { it.path }.distinct().chunked(DELETE_CHUNK).forEach { chunk ->
+            removed += db.songDao().deleteVisibleByPaths(chunk)
+        }
+        Log.i(TAG, "excluded ${rejected.size} file(s) by rules, removed $removed row(s)")
+        rejected.groupBy { it.reason }.forEach { (reason, hits) ->
+            Log.i(TAG, "  ${reason.label} × ${hits.size}: ${hits.take(3).joinToString { it.path }}")
+        }
     }
 
     // ---- recycle bin ----
@@ -201,5 +243,9 @@ class MusicRepository(
     private companion object {
         const val TAG = "MusicRepository"
         const val KEY_BLOCKED = "blocked_paths"
+        const val KEY_RULES_VERSION = "exclusion_rules_version"
+        const val KEY_LAST_EXCLUDED = "last_excluded_count"
+        /** SQLite's variable limit is 999 — stay well below it. */
+        const val DELETE_CHUNK = 400
     }
 }
